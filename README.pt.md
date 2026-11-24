@@ -40,7 +40,7 @@ As mensagens recebidas são verificadas pelo remetente antes do processamento de
 | Caso de uso | Comportamento |
 |---|---|
 | Grupo sem menção (@) ao bot | Ignorado; nenhuma resposta ou solicitação de aprovação é gerada |
-| Grupo com menção explícita (@) ao bot | Sem necessidade de vinculação prévia: qualquer participante pode enviar tarefas |
+| Grupo que atende às regras de acionamento | O acesso em grupo por padrão permite todos os membros; configurável para «Apenas usuários aprovados» ou «Desativado». Mensagens não autorizadas são ignoradas silenciosamente |
 | Mensagem direta de quem escaneou o QR | Usuários de WeChat, Feishu, Lark e QQ que escanearam o QR code entram automaticamente na lista de permissões |
 | Mensagem direta de outros usuários | Entra na lista de espera das configurações até aprovação por um administrador |
 | Mensagem direta após QR sem identificação | A vinculação rápida do DingTalk e WeCom retorna apenas credenciais do bot; aprovação em configurações necessária |
@@ -69,9 +69,9 @@ As mensagens recebidas são verificadas pelo remetente antes do processamento de
 | **🐦 Feishu** | QR Code / Manual | Long Polling / Eventos | Open API / Cartões interativos |
 | **🌐 Lark** | QR Code / Manual | Long Polling / Eventos | Open API / Cartões interativos |
 | **💬 WeChat** | QR Code | Sondagem oficial sincronizada | Protocolo de sincronização nativo |
-| **🏢 WeCom** | QR Code / Manual | Callback interno | Webhook / Cartões formatados |
+| **🏢 WeCom** | QR Code / Manual / URL do WebSocket | Callback interno | Webhook / Cartões formatados / Suporte On-Premise |
 | **🐧 QQ** | QR Code / Manual | WebSocket oficial / Webhook | OpenAPI / Markdown avançado |
-| **✈️ Telegram** | Token de Bot | Long Polling (getUpdates) | Telegram Bot API / Citações expansíveis |
+| **✈️ Telegram** | Token de Bot | Long Polling (getUpdates) | Telegram Bot API |
 | **🎮 Discord** | Token de Bot | Gateway WebSocket | REST API |
 | **💬 Slack** | Bot Token & App Token | Socket Mode WebSocket | Web API / Block Kit |
 
@@ -101,11 +101,22 @@ Acessível no painel em **Plugins → @michengai/dsh-im-connect**:
 
 ### 4. Bloco recolhível de raciocínio (`thinkingDisplay`)
 - **Padrão**: Desativado (`off`)
-- **Função**: Envia a cadeia de pensamento no Telegram (`<blockquote expandable>`) e Feishu/Lark (processo nativo de pensamento ou cartão recolhível em tópicos).
+- **Função**: Envia a cadeia de pensamento no Feishu/Lark (processo nativo de pensamento ou cartão recolhível em tópicos; o Telegram não suporta mais o pensamento recolhível, mantendo as linhas de status e respostas habituais).
 
 ### 5. Isolamento de sessões de tópicos no Feishu (`threadSessions`)
 - **Padrão**: Desativado (`false`)
 - **Função**: Quando ativado, os tópicos de resposta em grupos do Feishu mantêm sessões e contextos isolados baseados no ID da mensagem raiz. Por padrão, todos os tópicos compartilham o contexto do grupo.
+
+### 6. URL personalizada de WebSocket no WeCom (`wsUrl`)
+- **Padrão**: URL oficial (`wss://openws.work.weixin.qq.com`)
+- **Função**: Permite configurar uma URL personalizada de WebSocket para implantações locais ou privadas. Deixe em branco para usar o endereço padrão oficial.
+- **Configuração na interface**: Insira a URL no formulário manual ao adicionar uma conta ou edite-a a qualquer momento nos detalhes da conta. As alterações reconectam automaticamente ao salvar.
+- **Exemplo** (configuração de conta):
+  ```json
+  {
+    "wsUrl": "wss://custom.wecom.internal/ws"
+  }
+  ```
 
 ## Uso e comandos
 

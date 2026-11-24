@@ -17,9 +17,10 @@ export interface DeliveryOutcome {
     definite?: boolean;
 }
 /**
- * 平台是否已经明确答复「本次发送没有送达」。
+ * 是否有明确证据证明本次发送未落地。
  *
- * 只认渠道显式抛出的 {@link DeliveryRejected}（例如微信
+ * {@link DeliveryUnavailable} 只用于适配器证明连接建立前失败、请求尚未提交。
+ * 另一类是渠道显式抛出的 {@link DeliveryRejected}（例如微信
  * `/ilink/bot/sendmessage ret=-2 … prepare failed`、HTTP 429/503）：
  * 这类响应说明请求到达平台但未被受理，重发不会让用户收到两条。
  *
@@ -39,6 +40,7 @@ export declare class ImEngine {
     private readonly resolvePrivateAccess;
     private readonly resolveCommandPermissions;
     private readonly sendRetryDelaysMs;
+    private readonly resolveGroupAccess;
     private readonly deferred;
     private deferredTimer?;
     private recovering;
@@ -86,7 +88,7 @@ export declare class ImEngine {
      * @param sendRetryDelaysMs 分片发送退避表；测试可传 `[0]` 关闭等待。
      * @param topicTitleFile 话题名状态文件；缺省只在进程内去重。
      */
-    constructor(ctx: Context, store: SessionMapStore, seen: SeenStore, config: EngineConfig, log: (line: string) => void, onUnauthorized?: ((channelId: string, msg: ImMessage) => string) | undefined, resolveConfig?: (channelId: string) => EngineConfig, resolvePrivateAccess?: (channelId: string) => 'approved' | 'all', resolveCommandPermissions?: (channelId: string) => CommandPermissions, deliveryFile?: string, sendRetryDelaysMs?: readonly number[], topicTitleFile?: string);
+    constructor(ctx: Context, store: SessionMapStore, seen: SeenStore, config: EngineConfig, log: (line: string) => void, onUnauthorized?: ((channelId: string, msg: ImMessage) => string) | undefined, resolveConfig?: (channelId: string) => EngineConfig, resolvePrivateAccess?: (channelId: string) => 'approved' | 'all', resolveCommandPermissions?: (channelId: string) => CommandPermissions, deliveryFile?: string, sendRetryDelaysMs?: readonly number[], topicTitleFile?: string, resolveGroupAccess?: (channelId: string) => 'all' | 'approved' | 'disabled');
     renameSession(sessionId: string, title: string): boolean;
     removeSession(sessionId: string): Promise<boolean>;
     cleanupMissingSession(sessionId: string): Promise<boolean>;
@@ -99,7 +101,8 @@ export declare class ImEngine {
     setModel(provider: string, model: string, reasoningEffort?: string): void;
     setCwd(cwd: string): void;
     setPermission(permission: string): void;
-    attachMappedSessions(): Promise<void>;
+    recoverMappedSessions(): Promise<void>;
+    attachMappedSessions(active: () => boolean): Promise<void>;
     register(channel: ChannelAdapter): void;
     unregister(channelId: string): void;
     addAllowed(channelId: string, userId: string): void;
@@ -112,6 +115,8 @@ export declare class ImEngine {
     private userAllowed;
     private cancelSessionInteractions;
     private isAuthorized;
+    private accessDecision;
+    private isActorAuthorized;
     private rejectUnauthorized;
     private handleInbound;
     private validDelivery;
@@ -135,6 +140,7 @@ export declare class ImEngine {
     private answerApproval;
     private onApproval;
     private handleApproval;
+    private recoverQuestionActor;
     private onUserQuestions;
     /**
      * DSH 0.1.1-rc.2 exposes a mutable provider behind a stable service.ask.
@@ -197,6 +203,7 @@ export declare class ImEngine {
      */
     private sendChunk;
     private formatQuestion;
+    private canDeliverGroupInteraction;
     private deliverQuestionInteraction;
     private announceApprovalTimedOut;
     private announceInteractionCancelled;

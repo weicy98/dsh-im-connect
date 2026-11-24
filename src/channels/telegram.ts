@@ -78,11 +78,6 @@ const STATUS_REACTION_DELAYS_MS = [400, 1200] as const
  * 放宽到 6 秒仍然有界，不会堆积请求。
  */
 const TYPING_REQUEST_TIMEOUT_MS = 6000
-/**
- * typing 自己吃到 429 后的退避上限。正文 / 编辑的冷却再长也不牵连 typing：
- * 一个群被编辑限流几十秒时，「正在输入」不该跟着整段消失。
- */
-const TYPING_COOLDOWN_MAX_MS = 30_000
 
 function isTerminalStatus(state: string): boolean {
   return state === 'success' || state === 'ended' || state === 'error' || state === 'cancelled'
@@ -166,6 +161,22 @@ export function toTelegramRichMarkdown(value: string): string | undefined {
   const fences = text.split('\n').filter((line) => FENCE_LINE.test(line)).length
   if (fences % 2 !== 0) return undefined
   return toTelegramHardBreaks(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * 富文本载荷里的状态前缀转义。
+ *
+ * 状态行是插件自己拼的字面文本（工具名、参数摘要），其中的 `_`、`*`、反引号、
+ * `~`、`[`、`]`、`$`、`=` 会被 Telegram 的 Rich Markdown 当成行内标记，
+ * 于是 `mcp__magpie__…` 这类工具名会掉字符、glob/正则摘要会被当成强调；
+ * 正文是模型输出的 Markdown，必须保持原样，因此只转义 head 这一段。
+ *
+ * 转义在合成与截断之后进行（传进来的已是最终文本），反斜杠必须一起转义，
+ * 否则 Windows 路径里的 `\` 会吃掉后加的转义符。
+ */
+export function escapeTelegramStatusLine(composed: string, head: string): string {
+  if (!head) return composed
+  return composed.slice(0, head.length).replace(/[\\`*_~[\]$=]/g, '\\$&') + composed.slice(head.length)
 }
 
 /** 每个聊天当前还没收口的那条回复消息；状态行与正文合成同一条 Telegram 消息。 */
@@ -855,7 +866,7 @@ export function createTelegramChannel(config: TelegramConfig, log: (line: string
     async sendAction(chatId, _action, signal) {
       signal?.throwIfAborted()
       const route = parseTelegramChatId(chatId)
-      // 只受 typing 自己的短冷却约束：正文 / 编辑被限流时，「正在输入」仍要照发，
+      // 只受 typing 自己的冷却约束：正文 / 编辑被限流时，「正在输入」仍要照发，
       // 否则同聊天的一次 40 秒 429 就能让它整段消失。typing 自己吃到 429 才退避。
       const chatKey = String(route.chatId)
       if ((typingCooldownUntil.get(chatKey) ?? 0) > Date.now()) return
@@ -870,8 +881,9 @@ export function createTelegramChannel(config: TelegramConfig, log: (line: string
         const status = Number((error as { status?: unknown } | undefined)?.status)
         const retryAfterMs = Number((error as { retryAfterMs?: unknown } | undefined)?.retryAfterMs)
         if (status === 429) {
-          const wait = Math.min(Math.max(1000, Number.isFinite(retryAfterMs) ? retryAfterMs : 0), TYPING_COOLDOWN_MAX_MS)
-          typingCooldownUntil.set(chatKey, Date.now() + wait)
+          const wait = Math.max(1000, Number.isFinite(retryAfterMs) ? retryAfterMs : 0)
+          // 同群不同话题的在途 429 可能乱序返回；较短的新冷却不能覆盖较长的旧冷却。
+          typingCooldownUntil.set(chatKey, Math.max(typingCooldownUntil.get(chatKey) ?? 0, Date.now() + wait))
         }
         const safeStatus = Number.isFinite(status) ? ` status=${status}` : ''
         // 每次 pulse 都失败时只记第一条：可观测，又不至于把日志刷满。
@@ -928,18 +940,21 @@ export function createTelegramChannel(config: TelegramConfig, log: (line: string
         if (openReplies.get(chatId) === current) openReplies.delete(chatId)
       }
       /** 状态行在上、正文在下，合成同一条消息；状态为空时只剩正文。 */
-      const compose = (nextBody: string) => {
-        const head = current.status.trim()
+      const compose = (head: string, nextBody: string) => {
         const text = head ? (nextBody ? `${head}\n\n${nextBody}` : head) : nextBody
         return [...(text || '')].slice(0, 4000).join('') || '…'
       }
 
       const flush = async (nextBody: string, allowSend: boolean) => {
-        const next = compose(nextBody)
+        const head = current.status.trim()
+        const next = compose(head, nextBody)
         if (next === current.last) return
         // last 只在发送成功后更新：失败时保留旧值，finish 才能靠 sendMessage 兜底送出全文
         try {
-          const markdown = richDisabled ? undefined : toTelegramRichMarkdown(next)
+          // Telegram Rich Markdown 会把状态行里的 `_` 等当成行内标记；只转义状态前缀，
+          // 正文与纯文本回退都保持原样。
+          const richText = escapeTelegramStatusLine(next, head)
+          const markdown = richDisabled ? undefined : toTelegramRichMarkdown(richText)
           if (markdown !== undefined) {
             try {
               await api('editMessageText', { chat_id: route.chatId, message_id: current.messageId, rich_message: { markdown } })
@@ -1038,6 +1053,7 @@ export function createTelegramChannel(config: TelegramConfig, log: (line: string
       }
     },
     sendThinking: publishThinking,
+    maxThinkingChars: 4096,
     setMessageHandler(h) { handler = h },
     setTopicEditHandler(h) { onTopicEdited = h },
     async diagnose(signal) {

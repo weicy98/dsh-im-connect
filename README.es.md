@@ -40,7 +40,7 @@ Los mensajes entrantes se evalúan según el remitente antes de procesar comando
 | Caso de uso | Comportamiento |
 |---|---|
 | Grupo sin mención (@) al bot | Se ignora sin responder ni generar solicitudes de aprobación; mencionar a otros miembros tampoco activa el bot |
-| Grupo con mención explícita (@) al bot | No requiere vinculación previa: cualquier participante del grupo puede enviar tareas |
+| Grupo que cumple las reglas de activación | El acceso grupal por defecto permite a todos los miembros; se puede configurar como «Solo usuarios aprobados» o «Deshabilitado». Los mensajes no autorizados se ignoran silenciosamente |
 | Mensaje directo del usuario que escaneó el QR | Los usuarios de WeChat, Feishu, Lark y QQ que hayan escaneado el código QR se añaden automáticamente a la lista blanca |
 | Mensaje directo de otros usuarios | Aparecen en la lista de espera de configuración hasta que un administrador los apruebe |
 | Mensaje directo tras vinculación QR sin identidad de usuario | La vinculación rápida de DingTalk y WeCom solo devuelve credenciales del bot, por lo que el usuario debe ser aprobado en configuración |
@@ -69,9 +69,9 @@ Los mensajes entrantes se evalúan según el remitente antes de procesar comando
 | **🐦 Feishu** | Código QR / Manual | Long Polling / Eventos | Open API / Mensajes interactivos |
 | **🌐 Lark** | Código QR / Manual | Long Polling / Eventos | Open API / Mensajes interactivos |
 | **💬 WeChat** | Código QR | Sondeo oficial sincronizado | Protocolo de sincronización nativo |
-| **🏢 WeCom** | Código QR / Manual | Callback interno | Webhook / Tarjetas de mensajes |
+| **🏢 WeCom** | Código QR / Manual / WebSocket URL | Callback interno | Webhook / Tarjetas de mensajes / Despliegue privado |
 | **🐧 QQ** | Código QR / Manual | WebSocket oficial / Webhook | OpenAPI / Markdown enriquecido |
-| **✈️ Telegram** | Bot Token | Long Polling (getUpdates) | Telegram Bot API / Citas plegables |
+| **✈️ Telegram** | Bot Token | Long Polling (getUpdates) | Telegram Bot API |
 | **🎮 Discord** | Bot Token | Gateway WebSocket | REST API |
 | **💬 Slack** | Bot Token & App Token | Socket Mode WebSocket | Web API / Block Kit |
 
@@ -101,11 +101,22 @@ Disponible desde el panel de administración en **Complementos → @michengai/ds
 
 ### 4. Mensaje de pensamiento plegable (`thinkingDisplay`)
 - **Predeterminado**: Desactivado (`off`)
-- **Función**: Envía la cadena de pensamiento del modelo en Telegram (`<blockquote expandable>`) y Feishu/Lark (proceso de pensamiento nativo o tarjeta plegable en hilos).
+- **Función**: Envía la cadena de pensamiento del modelo en Feishu/Lark (proceso de pensamiento nativo o tarjeta plegable en hilos; Telegram ya no admite el pensamiento plegable, manteniendo las líneas de estado y respuestas habituales).
 
 ### 5. Aislamiento de sesiones de hilos en Feishu (`threadSessions`)
 - **Predeterminado**: Desactivado (`false`)
 - **Función**: Cuando está habilitado, los hilos de respuesta en grupos de Feishu mantienen sesiones y contextos independientes basados en el ID del mensaje raíz. De forma predeterminada, todos los hilos comparten el contexto del grupo.
+
+### 6. URL personalizada de WebSocket en WeCom (`wsUrl`)
+- **Predeterminado**: URL oficial (`wss://openws.work.weixin.qq.com`)
+- **Función**: Permite configurar una URL de WebSocket personalizada para despliegues locales o privados. Dejar en blanco para usar la dirección oficial predeterminada.
+- **Configuración en interfaz**: Ingrese la URL en el formulario de credenciales manuales al añadir una cuenta, o edítela en cualquier momento en el panel de detalles de la cuenta. Los cambios se reconectan automáticamente al guardar.
+- **Ejemplo** (configuración de cuenta):
+  ```json
+  {
+    "wsUrl": "wss://custom.wecom.internal/ws"
+  }
+  ```
 
 ## Uso y comandos
 

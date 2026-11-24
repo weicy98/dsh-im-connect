@@ -1,4 +1,5 @@
 import { DeferredDelivery, DeliveryRejected, DeliveryUnavailable, type DeferredEntry } from './deferred-delivery.js'
+import { readLiveSessionHistory, hasSessionHistoryCapability, type HistorySession } from './session-history.js'
 import { ChoiceSendError } from './choice-delivery.js'
 import { sleepWithSignal } from './abort.js'
 import { ThinkingDisplayTracker, normalizeThinkingDisplay, type ThinkingDisplayTarget } from './thinking-display.js'
@@ -6,7 +7,7 @@ import { assistantText, isSilentReplyText } from './assistant-text.js'
 import { readDeliveryHistory } from './delivery-history.js'
 import { FileInputError, filePromptParts } from './file-input.js'
 import { ChoiceStore, type Choice } from './choices.js'
-import { MessageProgress, ProgressTracker, type TurnCompletion } from './message-progress.js'
+import { extractErrorDetail, MessageProgress, ProgressTracker, type TurnCompletion } from './message-progress.js'
 import { notice, replyText, withReplyLocale } from './command-locale.js'
 import { FileDelivery, type DeliverySession } from './file-delivery.js'
 import { ChatCommands, type CommandDescriptor } from './chat-commands.js'
@@ -94,9 +95,10 @@ export interface DeliveryOutcome {
 }
 
 /**
- * 平台是否已经明确答复「本次发送没有送达」。
+ * 是否有明确证据证明本次发送未落地。
  *
- * 只认渠道显式抛出的 {@link DeliveryRejected}（例如微信
+ * {@link DeliveryUnavailable} 只用于适配器证明连接建立前失败、请求尚未提交。
+ * 另一类是渠道显式抛出的 {@link DeliveryRejected}（例如微信
  * `/ilink/bot/sendmessage ret=-2 … prepare failed`、HTTP 429/503）：
  * 这类响应说明请求到达平台但未被受理，重发不会让用户收到两条。
  *
@@ -105,15 +107,12 @@ export interface DeliveryOutcome {
  * 请求可能已经落地。这些都保持「送达未知」，只由用户用 `/delivery retry` 决定。
  */
 export function isDefiniteSendFailure(error: unknown): boolean {
-  return error instanceof DeliveryRejected
+  return error instanceof DeliveryRejected || error instanceof DeliveryUnavailable
 }
 
 interface AgentLike {
   id?: string
-  session?: {
-    id?: string
-    events?: readonly { type?: string; data?: Record<string, unknown> }[]
-  }
+  session?: HistorySession
 }
 
 interface ApprovalRequestLike {
@@ -193,7 +192,7 @@ export class ImEngine {
   private readonly sessionActors = new Map<string, string>()
   private readonly chatActors = new Map<string, string>()
   private readonly interactionMessageIds = new Map<string, string | undefined>()
-  private readonly questionActors = new Map<string, string>()
+  private readonly questionActors = new Map<string, string | undefined>()
   private readonly questionDeliveries = new Map<string, Promise<InteractionDeliveryResult>>()
   private readonly questionPromptDelivered = new Set<string>()
   private readonly queues = new Map<string, Promise<void>>()
@@ -255,6 +254,7 @@ export class ImEngine {
     deliveryFile?: string,
     private readonly sendRetryDelaysMs: readonly number[] = SEND_RETRY_DELAYS_MS,
     topicTitleFile?: string,
+    private readonly resolveGroupAccess: (channelId: string) => 'all' | 'approved' | 'disabled' = () => 'all',
   ) {
     this.topicTitles = new TopicTitleStore(topicTitleFile)
     this.deferred = new DeferredDelivery(deliveryFile)
@@ -398,8 +398,12 @@ export class ImEngine {
     void this.router.disposeAll()
   }
 
-  attachMappedSessions(): Promise<void> {
-    return this.router.attachMappedSessions(() => !this.disposed)
+  recoverMappedSessions(): Promise<void> {
+    return this.router.recoverMappedSessions(() => !this.disposed)
+  }
+
+  attachMappedSessions(active: () => boolean): Promise<void> {
+    return this.router.attachMappedSessions(() => !this.disposed && active())
   }
 
   register(channel: ChannelAdapter): void {
@@ -503,6 +507,26 @@ export class ImEngine {
     return this.userAllowed(channelId, msg.userId)
   }
 
+  private accessDecision(channelId: string, channel: ChannelAdapter, msg: ImMessage, addressed = msg.addressed): ReturnType<typeof decideAccess> {
+    return decideAccess({
+      userAllowed: msg.kind === 'group' ? this.userAllowed(channelId, msg.userId) : this.isAuthorized(channelId, channel, msg),
+      kind: msg.kind === 'group' ? 'group' : 'dm',
+      addressed,
+      groupAccess: this.resolveGroupAccess(channelId),
+    })
+  }
+
+  private isActorAuthorized(channelId: string, channel: ChannelAdapter, msg: ImMessage): boolean {
+    if (channel.authorizes?.(msg.userId ?? '') === false) return false
+    if (msg.kind === 'group') {
+      const policy = this.resolveGroupAccess(channelId)
+      if (policy === 'disabled') return false
+      if (policy === 'approved') return this.userAllowed(channelId, msg.userId)
+      return true
+    }
+    return this.isAuthorized(channelId, channel, msg)
+  }
+
   private async rejectUnauthorized(channelId: string, channel: ChannelAdapter, msg: ImMessage): Promise<void> {
     this.log(`[${channelId}] 拒绝未授权用户 ${msg.userId || '(无 userId)'}`)
     const hint = withReplyLocale(this.ctx, () => this.onUnauthorized?.(channelId, msg) ?? replyText('未授权：请管理员在设置 → IM助理 中批准你的访问。'))
@@ -517,18 +541,14 @@ export class ImEngine {
     try {
       if (msg.messageId && this.seen.has(`${channelId}:${msg.messageId}`)) return
       if (msg.messageId) this.seen.add(`${channelId}:${msg.messageId}`)
-      const decision = decideAccess({
-        userAllowed: this.isAuthorized(channelId, channel, msg),
-        kind: msg.kind === 'group' ? 'group' : 'dm',
-        addressed: msg.addressed,
-      })
+      const decision = this.accessDecision(channelId, channel, msg)
       if (decision === 'ignore') return
-      if (msg.userId) this.chatActors.set(`${channelId}:${msg.kind === 'group' ? 'group' : 'dm'}:${msg.chatId}`, msg.userId)
       if (decision === 'deny') {
         if (!msg.media?.length && await this.answerApproval(channelId, msg, this.approvalVerdict(msg.text))) return
         await this.rejectUnauthorized(channelId, channel, msg)
         return
       }
+      if (msg.userId) this.chatActors.set(`${channelId}:${msg.kind === 'group' ? 'group' : 'dm'}:${msg.chatId}`, msg.userId)
       if (!/^\/delivery(?:\s|$)/i.test(msg.text.trim())) void this.recoverDeliveries(channel, msg)
       let text = msg.text.trim()
       const kind: ChatKind = msg.kind === 'group' ? 'group' : 'dm'
@@ -580,8 +600,24 @@ export class ImEngine {
         return
       }
       if (binding && this.questions.has(binding.sessionId)) {
-        const actor = this.questionActors.get(binding.sessionId) ?? this.sessionActors.get(binding.sessionId)
-        if (actor && msg.userId !== actor) {
+        const questionActor = this.questionActors.has(binding.sessionId) ? this.questionActors.get(binding.sessionId) : this.sessionActors.get(binding.sessionId)
+        let isAuthorizedActor = false
+        if (questionActor) {
+          isAuthorizedActor = (msg.userId === questionActor)
+        } else {
+          const candidates = new Set<string>()
+          const sessionActor = this.sessionActors.get(binding.sessionId)
+          if (sessionActor) candidates.add(sessionActor)
+          if (kind === 'group') {
+            for (const entry of this.deferred.list(channel.id)) {
+              if (entry.sessionId === binding.sessionId && entry.message.kind === 'group' && entry.message.chatId === msg.chatId && entry.message.userId && !['sent', 'rejected', 'expired'].includes(entry.status)) {
+                candidates.add(entry.message.userId)
+              }
+            }
+          }
+          isAuthorizedActor = candidates.size === 0 || (!!msg.userId && candidates.has(msg.userId))
+        }
+        if (!isAuthorizedActor) {
           await this.deliver(channel, msg.chatId, notice(this.ctx, '只有发起当前任务的用户可以回答这个问题。'))
           return
         }
@@ -646,7 +682,8 @@ export class ImEngine {
     const channel = this.channels.get(entry.channelId)
     if (this.disposed || !channel) return false
     const binding = this.router.lookup(entry.channelId, entry.message.kind ?? 'dm', entry.message.chatId)
-    return binding?.sessionId === entry.sessionId && decideAccess({ userAllowed: this.isAuthorized(entry.channelId, channel, entry.message), kind: entry.message.kind, addressed: true }) === 'allow'
+    return binding?.sessionId === entry.sessionId && (entry.turn === undefined || !this.progress.hasNewerTurn(entry.sessionId, entry.turn))
+      && this.accessDecision(entry.channelId, channel, entry.message, true) === 'allow'
   }
 
   private async recoverDelivery(entry: DeferredEntry, fresh = false, explicit = false): Promise<'missing' | 'unavailable' | undefined> {
@@ -758,6 +795,7 @@ export class ImEngine {
 
   private async inject(channel: ChannelAdapter, msg: ImMessage, sources: ImMessage[] = [msg]): Promise<void> {
     if (this.disposed || this.channels.get(channel.id) !== channel) return
+    if (sources.some(source => source.kind === 'group' && this.accessDecision(channel.id, channel, source, true) !== 'allow')) return
     let scope = this.inputScopes.get(channel.id)
     if (!scope) this.inputScopes.set(channel.id, scope = new AbortController())
     const { signal } = scope
@@ -837,10 +875,24 @@ export class ImEngine {
   }
 
   private approvalVerdict(text: string): boolean | undefined {
-    const value = text.trim().toLowerCase()
-    if (['批准', '同意', 'yes', 'y', 'allow'].includes(value)) return true
-    if (['拒绝', '不同意', 'no', 'n', 'reject', 'deny'].includes(value)) return false
-    return undefined
+    const match = (val: string): boolean | undefined => {
+      if (['批准', '同意', 'yes', 'y', 'allow'].includes(val)) return true
+      if (['拒绝', '不同意', 'no', 'n', 'reject', 'deny'].includes(val)) return false
+      return undefined
+    }
+    const direct = match(text.trim().toLowerCase())
+    if (direct !== undefined) return direct
+
+    // 防御性剥离可能的 mention 占位符、@ 前缀及伴随标点（如 "@_user_1 批准"、"@bot 批准"、"<@123> 同意"、"@bot: yes"）
+    const stripped = text
+      .replace(/<@!?\S+?>/g, '')
+      .replace(/@\S+\s+/g, '')
+      .replace(/@([a-zA-Z0-9_.-]+|所有人|全体成员|机器人)/gi, '')
+      .replace(/^[：:,，\s]+/, '')
+      .replace(/[ \t]+/g, ' ')
+      .trim()
+      .toLowerCase()
+    return match(stripped)
   }
 
   private async answerApproval(channelId: string, msg: ImMessage, allow: boolean | undefined): Promise<boolean> {
@@ -862,7 +914,12 @@ export class ImEngine {
     }
     this.interactionMessageIds.set(binding.sessionId, msg.messageId)
     const ok = this.broker.answer(binding.sessionId, allow)
-    if (ok) await this.channels.get(channelId)?.send(msg.chatId, withReplyLocale(this.ctx, () => allow ? replyText('已批准。') : replyText('已拒绝。')))
+    if (ok) {
+      if (msg.userId && !this.sessionActors.has(binding.sessionId)) {
+        this.sessionActors.set(binding.sessionId, msg.userId)
+      }
+      await this.channels.get(channelId)?.send(msg.chatId, withReplyLocale(this.ctx, () => allow ? replyText('已批准。') : replyText('已拒绝。')))
+    }
     return ok
   }
 
@@ -887,15 +944,26 @@ export class ImEngine {
       const channel = binding ? this.channels.get(binding.channelId) : undefined
       if (!binding || !channel) return refused
       // 只记录真实发言人；不能拿 chatId 冒充用户，否则群聊会把发起者判成外人。
+      const recovered = !this.sessionActors.has(sessionId) && req.agent?.session
+        ? this.recoverQuestionActor(sessionId, req.agent.session).actor
+        : undefined
       const knownActor = this.sessionActors.get(sessionId)
         ?? this.chatActors.get(`${binding.channelId}:${binding.kind}:${binding.chatId}`)
+        ?? recovered
+        ?? (binding.kind === 'dm' ? binding.chatId : undefined)
       if (knownActor) this.sessionActors.set(sessionId, knownActor)
       const prompt = await withReplyLocale(this.ctx, () => this.approvalPrompt(req))
       const wait = this.broker.wait(sessionId, APPROVAL_WAIT_MS, req.signal)
       if (!wait) return refused
       const ticket = this.broker.token(sessionId)
       const delivery = await this.retryInteraction(channel, () => this.deliverInteraction(channel, binding.chatId, prompt, req.signal, {
-        sessionId, message: { chatId: binding.chatId, userId: knownActor ?? binding.chatId, kind: binding.kind, text: '', messageId: this.interactionMessageIds.get(sessionId) },
+        sessionId, message: {
+          chatId: binding.chatId,
+          userId: knownActor ?? (binding.kind === 'dm' ? binding.chatId : undefined),
+          kind: binding.kind,
+          text: '',
+          messageId: this.interactionMessageIds.get(sessionId),
+        },
         choices: withReplyLocale(this.ctx, () => [{ label: replyText('批准一次'), value: 'allow' }, { label: replyText('拒绝'), value: 'reject' }]),
         valid: () => this.broker.token(sessionId) === ticket && this.broker.isReady(sessionId),
       }))
@@ -923,6 +991,41 @@ export class ImEngine {
     }, req.signal, () => cancelled)
   }
 
+  private recoverQuestionActor(sessionId: string, session: HistorySession | undefined): { hasHistory: boolean; actor?: string } {
+    if (!hasSessionHistoryCapability(session)) return { hasHistory: false }
+    try {
+      const events = readLiveSessionHistory(session)
+      if (!events) return { hasHistory: true }
+      let turn: number | undefined
+      let ids = new Set<string>()
+      for (const event of events) {
+        if (event.type === 'turn/start') {
+          turn = Number.isSafeInteger(event.data?.turn) ? event.data.turn : undefined
+          ids = new Set()
+        } else if (event.type === 'turn/end' && event.data?.turn === turn) {
+          turn = undefined
+          ids.clear()
+        } else if (turn !== undefined && event.type === 'user/message') {
+          if (typeof event.data?.id === 'string') ids.add(event.data.id)
+          if (typeof event.data?.source?.rpcId === 'string') ids.add(event.data.source.rpcId)
+        }
+      }
+      if (turn === undefined || !ids.size) return { hasHistory: true }
+      const binding = this.router.bindingForSession(sessionId)
+      if (!binding) return { hasHistory: true }
+      const channel = this.channels.get(binding.channelId)
+      if (!channel) return { hasHistory: true }
+      const actors = new Set(this.deferred.list(binding.channelId).filter(entry =>
+        ids.has(entry.id) && entry.sessionId === sessionId && entry.message.kind === binding.kind
+        && entry.message.chatId === binding.chatId && !!entry.message.userId
+        && (entry.turn === undefined || entry.turn === turn)
+        && !['sent', 'rejected', 'expired'].includes(entry.status)
+        && this.isActorAuthorized(binding.channelId, channel, entry.message) && this.validDelivery(entry),
+      ).map(entry => entry.message.userId!))
+      return { hasHistory: true, actor: actors.size === 1 ? actors.values().next().value : undefined }
+    } catch { return { hasHistory: true } }
+  }
+
   private async onUserQuestions(
     req: UserQuestionRequestLike,
     next: () => Promise<UserQuestionAnswer>,
@@ -940,7 +1043,10 @@ export class ImEngine {
       throw req.signal.reason ?? new DOMException('Aborted', 'AbortError')
     }
     const initialBinding = this.router.bindingForSession(sessionId)
-    const actor = this.sessionActors.get(sessionId) ?? (initialBinding ? this.chatActors.get(`${initialBinding.channelId}:${initialBinding.kind}:${initialBinding.chatId}`) : undefined)
+    const recovered = this.recoverQuestionActor(sessionId, req.agent?.session)
+    const actor = recovered.hasHistory
+      ? (recovered.actor ?? (initialBinding?.kind === 'dm' ? initialBinding.chatId : undefined))
+      : this.sessionActors.get(sessionId) ?? (initialBinding ? this.chatActors.get(`${initialBinding.channelId}:${initialBinding.kind}:${initialBinding.chatId}`) : undefined) ?? (initialBinding?.kind === 'dm' ? initialBinding.chatId : undefined)
     if (actor) this.sessionActors.set(sessionId, actor)
     const typedQuestions = questions as UserQuestionItem[]
     return await this.runInteraction(sessionId, async () => {
@@ -955,7 +1061,7 @@ export class ImEngine {
       // Abort can reject while the prompt send is still in flight; attach the
       // observer now, then await the same promise after presentation completes.
       void wait.catch(() => undefined)
-      if (actor) this.questionActors.set(sessionId, actor)
+      this.questionActors.set(sessionId, actor)
       const resume = this.progress.waiting(sessionId, true)
       try {
         const delivery = await this.retryInteraction(channel, () => this.deliverQuestionInteraction(sessionId, channel, binding.chatId, this.formatQuestion(
@@ -1138,6 +1244,9 @@ export class ImEngine {
   private onSessionEvent(session: DeliverySession, event: { type?: string; surfaceOp?: unknown; data?: any }): Promise<void> {
     const id = String(session.id ?? '')
     if (event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn)) {
+      if (!this.disposed) void this.router.onTurnStarted(id, () => !this.disposed).catch(error => {
+        this.log(`[im-session] 首轮挂载工作区失败: ${error instanceof Error ? error.message : String(error)}`)
+      })
       const previous = this.observedTurns.get(id)
       if (previous === undefined || event.data.turn >= previous) {
         if (this.observedTurns.size >= 1024) this.observedTurns.delete(this.observedTurns.keys().next().value!)
@@ -1171,7 +1280,17 @@ export class ImEngine {
     if (event.type !== 'turn/end') this.progress.event(id, event)
     const outcome: DeliveryOutcome = { ok: !skip, content: false }
     const deferEnd = event.type === 'turn/end' && this.replyFinalization.keys().includes(id)
-    const process = () => skip ? Promise.resolve() : this.processSessionEvent(session, event, outcome, trackedEnd)
+    const process = async () => {
+      if (event.type === 'assistant/message' && event.surfaceOp === 'append' && !invalid
+        && binding && channel && !this.router.isMuted(id)) {
+        const content = event.data?.message?.content
+        // Tool-call narration is not an authoritative final body to replay after a crash.
+        const text = Array.isArray(content) && content.some(part => part?.type === 'tool-call')
+          ? undefined : assistantText(content, channel.skipInterimText)
+        if (text) this.deferred.preserveText(id, turn, text)
+      }
+      if (!skip) await this.processSessionEvent(session, event, outcome, trackedEnd)
+    }
     let work: Promise<void>
     if (event.type === 'assistant/message') {
       // Start now, registering content before a synchronous turn/end; queue only its barrier.
@@ -1371,12 +1490,16 @@ export class ImEngine {
       const thinkingFinal = this.thinking.finish(thinkingTarget)
       this.progress.delivery(sessionId, thinkingTurn, thinkingFinal.then(() => undefined))
       this.streamHints.delete(streamKey)
-      const reason = (event.data as { reason?: { kind?: string; error?: { message?: string } } } | undefined)?.reason
+      const reason = (event.data as { reason?: { kind?: string; error?: unknown } } | undefined)?.reason
       this.log(`[${channel.id}] 回合结束 ${sessionId}: ${reason?.kind ?? 'ok'}`)
       if (reason?.kind === 'error' && !trackedEnd) {
-        const detail = reason.error?.message || '模型调用失败'
+        const errorDetail = extractErrorDetail(reason.error)
+        const detail = errorDetail || '模型调用失败'
         this.log(`[${channel.id}] 回合失败 ${sessionId}: ${detail}`)
-        const failed = notice(this.ctx, '助手没有生成回复，请查看本机日志。')
+        const failed = [
+          notice(this.ctx, '助手没有生成回复，请查看本机日志。'),
+          errorDetail ? notice(this.ctx, '原因：{0}', errorDetail) : '',
+        ].filter(Boolean).join('\n\n')
         const taken = await this.streams.take(streamKey, sessionId)
         if (taken.invalidated || !stillDeliverable()) {
           await this.discardEmptyTake(taken)
@@ -1582,7 +1705,7 @@ export class ImEngine {
     const valid = () => {
       const current = this.router.lookup(channel.id, message.kind ?? 'dm', message.chatId)
       return !this.disposed && this.channels.get(channel.id) === channel && current?.sessionId === result.sessionId
-        && (message.kind === 'group' || this.isAuthorized(channel.id, channel, message))
+        && this.accessDecision(channel.id, channel, message, true) === 'allow'
         && (!channel.canDeliverDeferred || channel.canDeliverDeferred())
         && !this.progress.hasNewerTurn(result.sessionId, result.turn)
         && !this.questions.has(result.sessionId) && !this.broker.has(result.sessionId)
@@ -1592,13 +1715,23 @@ export class ImEngine {
     const notified = await withReplyLocale(this.ctx, async () => {
       const text = ({
         empty: replyText('本次处理已结束，未返回可投递的结果。可补充要求后继续。'),
-        error: replyText('本次处理失败，已返回的内容保留。请查看会话状态，或补充要求后重试。'),
+        error: [
+          replyText('本次处理失败，已返回的内容保留。请查看会话状态，或补充要求后重试。'),
+          result.errorDetail ? replyText('原因：{0}', result.errorDetail) : '',
+        ].filter(Boolean).join('\n\n'),
         cancelled: result.reasonKind === 'max-tokens'
           ? replyText('本次处理已达到输出长度上限，已返回的内容保留。可发送「继续」接续生成。')
           : replyText('本次处理已停止，已返回的内容保留。可直接发消息继续。'),
         'delivery-failed': replyText('本次处理已结束，但部分回复或文件未能发送。查看交付记录：/delivery；完整结果和文件请在网页查看，不会自动重复执行任务。'),
       })[status]
       if (!valid()) return
+      const noticeId = `completion:${result.sessionId}:${result.turn}:${status}`
+      try {
+        if (!this.deferred.beginNotice(noticeId, result.sessionId, channel.id, message, text, result.turn)) return
+      } catch (error) {
+        this.log(`[im-delivery] 完成通知记录失败: ${error instanceof Error ? error.message : String(error)}`)
+        return
+      }
       if (result.status === 'error' || result.status === 'cancelled' || result.status === 'empty') {
         for (const entry of this.deferred.list(channel.id, message)) if (entry.sessionId === result.sessionId && entry.turn === result.turn && entry.status === 'waiting') {
           this.deferred.patch(entry.id, { status: 'unknown' })
@@ -1613,11 +1746,14 @@ export class ImEngine {
           const body = text
           // 复用已有回复流发送异常说明；收口结果不明时不重复发送。
           await taken.stream.finish([taken.text, body].filter(Boolean).join('\n\n'))
+          this.deferred.patch(noticeId, { status: 'sent' })
           return true
         }
       }
-      const outcome = { ok: true }
+      const outcome: DeliveryOutcome = { ok: true }
       await this.deliver(channel, message.chatId, text, outcome)
+      if (outcome.ok) this.deferred.patch(noticeId, { status: 'sent' })
+      else if (outcome.definite) this.deferred.patch(noticeId, { status: 'ready' })
       return outcome.ok
     })
     if (notified) for (const id of terminalIds) this.deferred.patch(id, { status: 'sent' })
@@ -1737,6 +1873,17 @@ export class ImEngine {
 
   private formatQuestion(...args: Parameters<typeof formatUserQuestion>): string { return withReplyLocale(this.ctx, () => formatUserQuestion(...args)) }
 
+  private canDeliverGroupInteraction(channelId: string, channel: ChannelAdapter, chatId: string, actor?: string): boolean {
+    const policy = this.resolveGroupAccess(channelId)
+    if (policy === 'disabled') return false
+    if (policy === 'all') return true
+    if (actor && actor !== chatId) {
+      if (channel.authorizes?.(actor) === false) return false
+      return this.userAllowed(channelId, actor)
+    }
+    return (this.extraAllow.get(channelId)?.size ?? 0) > 0
+  }
+
   private deliverQuestionInteraction(
     sessionId: string,
     channel: ChannelAdapter,
@@ -1747,7 +1894,10 @@ export class ImEngine {
     let tracked: Promise<InteractionDeliveryResult>
     const current = this.questions.current(sessionId)
     const binding = this.router.bindingForSession(sessionId)
-    const actor = this.questionActors.get(sessionId) ?? this.sessionActors.get(sessionId) ?? (binding ? this.chatActors.get(`${binding.channelId}:${binding.kind}:${binding.chatId}`) : undefined) ?? (binding?.kind === 'dm' ? chatId : undefined)
+    const actor = this.questionActors.has(sessionId) ? this.questionActors.get(sessionId) : this.sessionActors.get(sessionId) ?? (binding ? this.chatActors.get(`${binding.channelId}:${binding.kind}:${binding.chatId}`) : undefined) ?? (binding?.kind === 'dm' ? chatId : undefined)
+    if (binding?.kind === 'group' && !this.canDeliverGroupInteraction(channel.id, channel, chatId, actor)) {
+      return Promise.resolve({ status: 'failed', deliveredAny: false, retrySafe: false })
+    }
     const selected = this.questionSelections.get(sessionId) ?? new Set<number>()
     const choices: Choice[] = current?.question.options?.map((option, index) => ({
       label: (current.question.multiSelect && selected.has(index) ? '✓ ' : '') + option.label,
@@ -1793,6 +1943,8 @@ export class ImEngine {
     interactive?: { sessionId: string; message: ImMessage; choices: Choice[]; valid: () => boolean },
   ): Promise<InteractionDeliveryResult> {
     let deliveredAny = false
+    const allowed = () => !interactive || interactive.message.kind !== 'group' || this.canDeliverGroupInteraction(channel.id, channel, interactive.message.chatId, interactive.message.userId)
+    if (!allowed()) return { status: 'failed', deliveredAny, retrySafe: false }
     const requiresDefinite = channel.interactionRetryRequiresDefinite === true
     let cardUnknown = false
     if (channel.sendChoices && interactive && text.length < channel.maxMessageLength - 512 && !signal?.aborted) {
@@ -1806,10 +1958,11 @@ export class ImEngine {
         },
       }) : channel
       const result = await withReplyLocale(this.ctx, () => this.choices.show(choiceChannel, interactive.message, text, interactive.choices,
-        interactive.sessionId, interactive.valid, replyText('点击按钮或按提示回复文字。')))
+        interactive.sessionId, () => allowed() && interactive.valid(), replyText('点击按钮或按提示回复文字。')))
       if (!result) return { status: signal?.aborted ? 'aborted' : 'delivered', deliveredAny: true }
     }
     for (const chunk of splitText(text, channel.maxMessageLength)) {
+      if (!allowed()) return { status: 'failed', deliveredAny, retrySafe: false }
       if (signal?.aborted) return { status: 'aborted', deliveredAny }
       try {
         await channel.send(chatId, chunk)

@@ -35,12 +35,12 @@ Send tasks to your local DSH through your usual messenger, even when you are awa
 
 ## Who can drive the assistant
 
-Inbound messages are identified before commands, tool approvals, or injection.
+Inbound messages are identified before commands, tool approvals, or injection. Group access uses the account's approved-user list independently of its private-chat access setting.
 
 | Case | Behavior |
 |---|---|
 | Group without a mention of this bot | Ignored without a reply or pending approval request; mentioning someone else also does not trigger it |
-| Group explicitly mentioning this bot | No binding. Anyone can send work |
+| Group message meeting the channel's addressing rules | Account group access defaults to all members; it can be limited to approved users or disabled. Rejected group messages are silently ignored |
 | DM from the QR scanner | WeChat / Feishu / Lark / QQ scanners are allowlisted automatically |
 | DM from anyone else | Appears on the settings pending list until approved |
 | DM after QR binding that does not return user identity | DingTalk / WeCom QR setup returns bot credentials only, so the scanner still needs settings approval |
@@ -71,7 +71,7 @@ WeChat is QR-only and DM-only, so the same WeChat account that scanned can talk 
 | 🐦 **Feishu** | ✅ Ready | QR, or App ID / App Secret; QR creates the bot automatically | Feishu account, or a self-built bot with App ID / Secret |
 | 🌐 **Lark** | ✅ Ready | QR, or App ID / App Secret | Lark account, or a self-built bot with App ID / Secret |
 | 💬 **WeChat** | ✅ Ready* | Official iLink QR | Dedicated account recommended; DM only |
-| 🏢 **WeCom** | ✅ Ready | QR (recommended), or Bot ID / Secret | WeCom intelligent bot |
+| 🏢 **WeCom** | ✅ Ready | QR (recommended), or Bot ID / Secret / WebSocket URL | WeCom intelligent bot; supports custom WebSocket URL for on-premise deployments |
 | 🐧 **QQ** | ✅ Ready | QR, or AppID / AppSecret | QQ Open Platform bot, not a personal QQ account |
 | ✈️ **Telegram** | ✅ Ready | Bot Token only | `@BotFather`; do not enable Webhook on the same bot |
 | 🎮 **Discord** | ✅ Ready | Bot Token only | Official Developer Portal bot. Enable the Message Content Intent. The first mention in a text or announcement channel continues in a thread without another mention |
@@ -298,7 +298,7 @@ Native configuration options are provided here. Their values are persisted in `c
 ### 4. Collapsible thinking message (`thinkingDisplay`)
 - **Default**: off (`mode: 'off'`).
 - **What it does**: when enabled, the model's reasoning is presented in an expandable form:
-  - **Telegram**: sent as a separate collapsible quote (`<blockquote expandable>`), about three lines collapsed, tap "show more" to expand; edited in place during the turn and retitled "🧠 Thought process" when the turn ends.
+  - **Telegram**: collapsible thinking is disabled, including for existing `collapsed` configurations. The thinking progress indicator and final answer remain available.
   - **Feishu / Lark**: sent as an official native thinking-process bubble (`/open-apis/im/v1/message_cot`) for direct messages and main chat; seamlessly falls back to a collapsible card (`collapsible_panel`) within group message threads or when the tenant lacks native CoT permission, preventing reasoning from leaking outside threads.
 - **Example** (plugin config slot):
   ```yaml
@@ -306,11 +306,11 @@ Native configuration options are provided here. Their values are persisted in `c
     mode: collapsed   # off | collapsed
     minChars: 120     # only send once this many characters accumulated
     intervalMs: 2000  # minimum interval between refreshes
-    maxChars: 3500    # per-message cap; longer text is truncated and noted
+    maxChars: 3500    # per-message cap; longer text is truncated and noted (native streaming CoT channels like Feishu use dedicated 64K budget)
   ```
-- **Channel and UI support**: implemented for Telegram, Feishu, and Lark; can be enabled in **Settings → IM Assistant → Account Details** by selecting **Collapsed** in the **Show thinking process** dropdown. Other channels ignore the setting and keep the existing status line.
+- **Channel and UI support**: implemented for Feishu and Lark; can be enabled in **Settings → IM Assistant → Account Details** by selecting **Collapsed** in the **Show thinking process** dropdown. Other channels ignore the setting and keep the existing status line.
 - **Boundaries and privacy**: collapsing is client-side display, not access control; everyone who can read the group message can expand the reasoning. Enable only where sharing reasoning is intentional. Thinking is not counted as final-answer delivery or included in automatic recovery.
-- **Resources and lifecycle**: off/unsupported channels retain no raw reasoning. When enabled, each turn retains at most a 4096 UTF-16-unit prefix plus a scalar character count. Pending refreshes coalesce to the latest snapshot; cancellation, rebinding, muting, unloading and turn replacement prevent stale output.
+- **Resources and lifecycle**: off/unsupported channels retain no raw reasoning. When enabled, each turn retains at most the channel capacity (4096 UTF-16 units by default, 65536 for Feishu native CoT) as a bounded prefix plus a scalar character count. Pending refreshes coalesce to the latest snapshot; cancellation, rebinding, muting, unloading and turn replacement prevent stale output.
 - **Ranges**: `minChars` 0–4096 (also applied on final), `intervalMs` 1000–60000, `maxChars` 200–4096. Finite out-of-range values are clamped, nonfinite values use defaults. HTML escaping, labels, wrappers and truncation notes all fit the budget without splitting emoji surrogate pairs.
 - **Fallback**: only a definite HTML entity rejection switches to plain text, which persists for later edits in that turn. Unknown network outcomes, authentication failures and rate limits do not trigger a format-switch resend.
 
@@ -322,6 +322,17 @@ Native configuration options are provided here. Their values are persisted in `c
   ```json
   {
     "threadSessions": "true"
+  }
+  ```
+
+### 6. WeCom custom WebSocket URL (`wsUrl`)
+- **Default**: official default (`wss://openws.work.weixin.qq.com`)
+- **Description**: Configure a custom WebSocket URL for on-premise or private deployments; leave blank to fall back to the official default.
+- **UI Configuration**: Enter the **WebSocket URL** in the manual credentials form when adding an account, or inspect, modify, or clear it anytime in the account settings panel. Changes reconnect automatically upon saving.
+- **Example** (account configuration):
+  ```json
+  {
+    "wsUrl": "wss://custom.wecom.internal/ws"
   }
   ```
 

@@ -428,8 +428,13 @@ window.__ModuleLoader__.load({
     function parseChannelSettingsRequest(value) {
       if (!value || typeof value !== "object") return undefined;
       const channelId = typeof value.channelId === "string" ? value.channelId.trim() : "";
-      if (!channelId) return undefined;
-      return { channelId, name: typeof value.name === "string" ? value.name : "" };
+      const accountId = typeof value.accountId === "string" ? value.accountId.trim() : "";
+      if (!channelId && !accountId) return undefined;
+      return {
+        channelId,
+        accountId: accountId || undefined,
+        name: typeof value.name === "string" ? value.name : "",
+      };
     }
     function writeChannelSettingsRequest(storage, request) {
       try { storage && storage.setItem(CHANNEL_SETTINGS_STORAGE_KEY, JSON.stringify(request)); } catch { /* ignore */ }
@@ -452,10 +457,20 @@ window.__ModuleLoader__.load({
     function resolveChannelSettingsTarget(request, channels) {
       const parsed = parseChannelSettingsRequest(request);
       if (!parsed || !Array.isArray(channels)) return undefined;
-      const channel = channels.find((item) => item && item.id === parsed.channelId);
+      if (parsed.accountId) {
+        for (const channel of channels) {
+          const account = (channel.accounts || []).find((a) => a && a.id === parsed.accountId);
+          if (account) return { channelId: channel.id, accountId: account.id };
+        }
+      }
+      const channel = channels.find((item) => item && (item.id === parsed.channelId || (item.accounts || []).some((a) => a && a.id === parsed.channelId)));
       if (!channel) return undefined;
       const accounts = channel.accounts || [];
-      return { channelId: channel.id, accountId: accounts.length === 1 ? accounts[0].id : undefined };
+      const matchedAccount = accounts.find((a) => a && (a.id === parsed.accountId || a.id === parsed.channelId));
+      return {
+        channelId: channel.id,
+        accountId: matchedAccount ? matchedAccount.id : (accounts.length === 1 ? accounts[0].id : undefined),
+      };
     }
     function pickSettingsSectionButton(buttons, labels) {
       const normalize = (value) => String(value || "").replace(/\s+/g, "").trim().toLowerCase();
@@ -599,6 +614,9 @@ window.__ModuleLoader__.load({
         "account.currentWorkspace": "当前工作区",
         "account.defaultName": "{channel}账号 {count}",
         "account.presetUnavailable": "预设不可用",
+        "account.groupAccess": "群聊准入",
+        "account.groupAll": "允许所有群成员",
+        "account.groupDisabled": "禁用群聊",
         "account.privateAccess": "私聊准入",
         "account.privateAll": "允许所有私聊用户",
         "account.privateApproved": "仅已批准用户",
@@ -609,6 +627,9 @@ window.__ModuleLoader__.load({
         "account.proxyNote": "仅影响当前账号；保存后自动重连生效。",
         "account.proxySaved": "代理地址已保存；留空保存可保留当前地址。",
         "account.proxyUrl": "代理地址",
+        "account.wecomWsUrl": "WebSocket URL",
+        "account.wecomWsUrlNote": "私有化部署时填写自定义长连接地址，留空使用官方默认地址；保存后自动重连生效。",
+        "account.wecomWsUrlPlaceholder": "默认 wss://openws.work.weixin.qq.com",
         "account.receive": "接收消息",
         "account.receiveDescription": "关闭后保留账号配置，但不接收新消息",
         "account.remark": "名称备注",
@@ -650,7 +671,7 @@ window.__ModuleLoader__.load({
         "account.telegramGroupPolicyNote": "仅影响当前账号群聊；若需普通消息送达，请将 Bot 设为群管理员或在 @BotFather 中关闭隐私模式（/setprivacy → Disable）。",
         "account.telegramThinkingDisplay": "展示思考过程",
         "account.telegramThinkingDisplayCollapsed": "折叠展示",
-        "account.telegramThinkingDisplayNote": "开启后，模型的思考过程会以可折叠引用块单独发送，点击可展开查看。群聊中所有成员均可展开，请在允许分享思考的部署开启。",
+        "account.telegramThinkingDisplayNote": "开启后，模型的思考过程会以折叠形式单独展示，点击可展开查看。群聊中所有成员均可展开，请在允许分享思考的部署开启。",
         "account.telegramThinkingDisplayOff": "关闭",
         "account.threadSessions": "群回复串会话隔离",
         "account.threadSessionsIsolated": "独立会话",
@@ -807,6 +828,8 @@ window.__ModuleLoader__.load({
         "field.telegram.token": "Bot Token",
         "field.wecom.botId": "Bot ID",
         "field.wecom.secret": "Secret",
+        "field.wecom.wsUrl": "WebSocket URL",
+        "field.wecom.wsUrl.placeholder": "默认 wss://openws.work.weixin.qq.com",
         "hover.copied": "已复制",
         "loading": "加载中…",
         "pending.notice": "有访问请求。批准后该用户才能驱动本机助手。",
@@ -933,6 +956,9 @@ window.__ModuleLoader__.load({
         "account.currentWorkspace": "Current workspace",
         "account.defaultName": "{channel} account {count}",
         "account.presetUnavailable": "Preset unavailable",
+        "account.groupAccess": "Group chat access",
+        "account.groupAll": "Allow all group members",
+        "account.groupDisabled": "Disable group chats",
         "account.privateAccess": "Private chat access",
         "account.privateAll": "Allow all DM users",
         "account.privateApproved": "Approved users only",
@@ -943,6 +969,9 @@ window.__ModuleLoader__.load({
         "account.proxyNote": "Affects only this account. The channel reconnects automatically after saving.",
         "account.proxySaved": "A proxy address is saved. Leave the field blank to keep it.",
         "account.proxyUrl": "Proxy address",
+        "account.wecomWsUrl": "WebSocket URL",
+        "account.wecomWsUrlNote": "Enter a custom WebSocket URL for on-premise deployments, or leave blank for the official default; reconnects automatically after saving.",
+        "account.wecomWsUrlPlaceholder": "Default: wss://openws.work.weixin.qq.com",
         "account.receive": "Receive messages",
         "account.receiveDescription": "Turn this off to keep the account settings without receiving new messages",
         "account.remark": "Name remark",
@@ -984,7 +1013,7 @@ window.__ModuleLoader__.load({
         "account.telegramGroupPolicyNote": "Applies only to this account. To receive plain group messages, make the bot a group admin or disable privacy mode in @BotFather (/setprivacy → Disable).",
         "account.telegramThinkingDisplay": "Show thinking process",
         "account.telegramThinkingDisplayCollapsed": "Collapsed",
-        "account.telegramThinkingDisplayNote": "When enabled, reasoning is sent as an expandable quote block that users can tap to expand. All group members can view expanded reasoning.",
+        "account.telegramThinkingDisplayNote": "When enabled, reasoning is displayed in a collapsible block that users can tap to expand. All group members can view expanded reasoning.",
         "account.telegramThinkingDisplayOff": "Off",
         "account.threadSessions": "Thread session isolation",
         "account.threadSessionsIsolated": "Isolated sessions",
@@ -1141,6 +1170,8 @@ window.__ModuleLoader__.load({
         "field.telegram.token": "Bot Token",
         "field.wecom.botId": "Bot ID",
         "field.wecom.secret": "Secret",
+        "field.wecom.wsUrl": "WebSocket URL",
+        "field.wecom.wsUrl.placeholder": "Default: wss://openws.work.weixin.qq.com",
         "hover.copied": "Copied",
         "loading": "Loading…",
         "pending.notice": "There are access requests. Approve a user before they can control the local assistant.",
@@ -1267,6 +1298,9 @@ window.__ModuleLoader__.load({
         "account.currentWorkspace": "現在のワークスペース",
         "account.defaultName": "{channel} アカウント {count}",
         "account.presetUnavailable": "プリセット利用不可",
+        "account.groupAccess": "グループアクセス",
+        "account.groupAll": "全メンバーを許可",
+        "account.groupDisabled": "グループを無効化",
         "account.privateAccess": "DMアクセス許可",
         "account.privateAll": "すべてのDMユーザーを許可",
         "account.privateApproved": "承認済みユーザーのみ",
@@ -1277,6 +1311,9 @@ window.__ModuleLoader__.load({
         "account.proxyNote": "現在のアカウントにのみ影響します。保存後に自動再接続して反映されます。",
         "account.proxySaved": "プロキシアドレスは保存されています。空のまま保存すると現在のアドレスが維持されます。",
         "account.proxyUrl": "プロキシアドレス",
+        "account.wecomWsUrl": "WebSocket URL",
+        "account.wecomWsUrlNote": "オンプレミス展開の場合はカスタム WebSocket URL を入力し、公式デフォルトを使用する場合は空欄にします。保存後に自動再接続されます。",
+        "account.wecomWsUrlPlaceholder": "デフォルト wss://openws.work.weixin.qq.com",
         "account.receive": "メッセージを受信",
         "account.receiveDescription": "無効にするとアカウント設定を維持したまま新規メッセージを受信しません",
         "account.remark": "名称備考",
@@ -1318,7 +1355,7 @@ window.__ModuleLoader__.load({
         "account.telegramGroupPolicyNote": "現在のアカウントのグループにのみ影響します。通常のメッセージを受信するには、Botをグループ管理者に設定するか、@BotFatherでプライバシーモードを無効にしてください（/setprivacy → Disable）。",
         "account.telegramThinkingDisplay": "思考プロセスの表示",
         "account.telegramThinkingDisplayCollapsed": "折りたたみ表示",
-        "account.telegramThinkingDisplayNote": "有効にすると、思考過程が折りたたみ可能な引用ブロックとして送信され、タップして展開できます。グループ内の全員が展開して閲覧可能です。",
+        "account.telegramThinkingDisplayNote": "有効にすると、思考過程が折りたたみ可能なブロックとして送信され、タップして展開できます。グループ内の全員が展開して閲覧可能です。",
         "account.telegramThinkingDisplayOff": "オフ",
         "account.threadSessions": "スレッドセッション分離",
         "account.threadSessionsIsolated": "スレッドごとに分離",
@@ -1475,6 +1512,8 @@ window.__ModuleLoader__.load({
         "field.telegram.token": "Bot Token",
         "field.wecom.botId": "Bot ID",
         "field.wecom.secret": "Secret",
+        "field.wecom.wsUrl": "WebSocket URL",
+        "field.wecom.wsUrl.placeholder": "デフォルト wss://openws.work.weixin.qq.com",
         "hover.copied": "コピー完了",
         "loading": "読み込み中…",
         "pending.notice": "アクセスリクエストがあります。承認されたユーザーのみがローカルアシスタントを操作できます。",
@@ -1601,6 +1640,9 @@ window.__ModuleLoader__.load({
         "account.currentWorkspace": "Espacio de trabajo actual",
         "account.defaultName": "Cuenta de {channel} {count}",
         "account.presetUnavailable": "Preajuste no disponible",
+        "account.groupAccess": "Acceso a grupos",
+        "account.groupAll": "Permitir a todos los miembros",
+        "account.groupDisabled": "Desactivar grupos",
         "account.privateAccess": "Acceso a chat privado",
         "account.privateAll": "Permitir a todos los usuarios de DM",
         "account.privateApproved": "Solo usuarios aprobados",
@@ -1611,6 +1653,9 @@ window.__ModuleLoader__.load({
         "account.proxyNote": "Afecta solo a esta cuenta. El canal se reconecta automáticamente al guardar.",
         "account.proxySaved": "Se ha guardado una dirección de proxy. Deje el campo en blanco para conservarla.",
         "account.proxyUrl": "Dirección del proxy",
+        "account.wecomWsUrl": "WebSocket URL",
+        "account.wecomWsUrlNote": "Ingrese una URL de WebSocket personalizada para implementaciones locales o déjela en blanco para el valor predeterminado oficial; se reconecta automáticamente al guardar.",
+        "account.wecomWsUrlPlaceholder": "Predeterminado: wss://openws.work.weixin.qq.com",
         "account.receive": "Recibir mensajes",
         "account.receiveDescription": "Desactive esto para conservar la configuración de la cuenta sin recibir nuevos mensajes",
         "account.remark": "Observación del nombre",
@@ -1652,7 +1697,7 @@ window.__ModuleLoader__.load({
         "account.telegramGroupPolicyNote": "Afecta solo a los grupos de esta cuenta. Para recibir mensajes normales, haga administrador al bot o desactive el modo de privacidad en @BotFather (/setprivacy → Disable).",
         "account.telegramThinkingDisplay": "Mostrar proceso de razonamiento",
         "account.telegramThinkingDisplayCollapsed": "Plegado",
-        "account.telegramThinkingDisplayNote": "Cuando está habilitado, el razonamiento se envía como un bloque de cita desplegable que los usuarios pueden tocar para expandir. Todos los miembros pueden verlo.",
+        "account.telegramThinkingDisplayNote": "Cuando está habilitado, el razonamiento se envía como un bloque desplegable que los usuarios pueden tocar para expandir. Todos los miembros pueden verlo.",
         "account.telegramThinkingDisplayOff": "Desactivado",
         "account.threadSessions": "Aislamiento de sesiones de hilos",
         "account.threadSessionsIsolated": "Sesiones aisladas",
@@ -1809,6 +1854,8 @@ window.__ModuleLoader__.load({
         "field.telegram.token": "Bot Token",
         "field.wecom.botId": "Bot ID",
         "field.wecom.secret": "Secret",
+        "field.wecom.wsUrl": "WebSocket URL",
+        "field.wecom.wsUrl.placeholder": "Predeterminado: wss://openws.work.weixin.qq.com",
         "hover.copied": "Copiado",
         "loading": "Cargando…",
         "pending.notice": "Hay solicitudes de acceso. Apruebe a un usuario para que pueda controlar el asistente local.",
@@ -1935,6 +1982,9 @@ window.__ModuleLoader__.load({
         "account.currentWorkspace": "Espace de travail actuel",
         "account.defaultName": "Compte {channel} {count}",
         "account.presetUnavailable": "Préréglage indisponible",
+        "account.groupAccess": "Accès aux groupes",
+        "account.groupAll": "Autoriser tous les membres",
+        "account.groupDisabled": "Désactiver les groupes",
         "account.privateAccess": "Accès aux messages privés",
         "account.privateAll": "Autoriser tous les utilisateurs en MP",
         "account.privateApproved": "Utilisateurs approuvés uniquement",
@@ -1945,6 +1995,9 @@ window.__ModuleLoader__.load({
         "account.proxyNote": "Ne concerne que ce compte. Le canal se reconnecte automatiquement après enregistrement.",
         "account.proxySaved": "Une adresse de proxy est enregistrée. Laissez vide pour la conserver.",
         "account.proxyUrl": "Adresse du proxy",
+        "account.wecomWsUrl": "WebSocket URL",
+        "account.wecomWsUrlNote": "Saisissez une URL WebSocket personnalisée pour les déploiements sur site, ou laissez vide pour la valeur par défaut officielle ; se reconnecte automatiquement après enregistrement.",
+        "account.wecomWsUrlPlaceholder": "Par défaut : wss://openws.work.weixin.qq.com",
         "account.receive": "Recevoir des messages",
         "account.receiveDescription": "Désactivez cette option pour conserver les paramètres sans recevoir de nouveaux messages",
         "account.remark": "Remarque sur le nom",
@@ -1986,7 +2039,7 @@ window.__ModuleLoader__.load({
         "account.telegramGroupPolicyNote": "Ne concerne que ce compte. Pour recevoir les messages ordinaires, nommez le bot administrateur ou désactivez le mode confidentialité dans @BotFather (/setprivacy → Disable).",
         "account.telegramThinkingDisplay": "Affichage du raisonnement",
         "account.telegramThinkingDisplayCollapsed": "Replié",
-        "account.telegramThinkingDisplayNote": "Si activé, le raisonnement est envoyé sous forme de bloc de citation pliable pouvant être déroulé au toucher. Visible par tous les membres du groupe.",
+        "account.telegramThinkingDisplayNote": "Si activé, le raisonnement est envoyé sous forme de bloc pliable pouvant être déroulé au toucher. Visible par tous les membres du groupe.",
         "account.telegramThinkingDisplayOff": "Désactivé",
         "account.threadSessions": "Isolation des sessions de fil",
         "account.threadSessionsIsolated": "Sessions isolées",
@@ -2143,6 +2196,8 @@ window.__ModuleLoader__.load({
         "field.telegram.token": "Bot Token",
         "field.wecom.botId": "Bot ID",
         "field.wecom.secret": "Secret",
+        "field.wecom.wsUrl": "WebSocket URL",
+        "field.wecom.wsUrl.placeholder": "Par défaut : wss://openws.work.weixin.qq.com",
         "hover.copied": "Copié",
         "loading": "Chargement…",
         "pending.notice": "Demandes d'accès en attente. Approuvez un utilisateur pour lui permettre de piloter l'assistant local.",
@@ -2269,6 +2324,9 @@ window.__ModuleLoader__.load({
         "account.currentWorkspace": "Aktueller Arbeitsbereich",
         "account.defaultName": "{channel}-Konto {count}",
         "account.presetUnavailable": "Voreinstellung nicht verfügbar",
+        "account.groupAccess": "Gruppenzugriff",
+        "account.groupAll": "Alle Mitglieder zulassen",
+        "account.groupDisabled": "Gruppen deaktivieren",
         "account.privateAccess": "Privatchat-Zugriff",
         "account.privateAll": "Alle DM-Benutzer zulassen",
         "account.privateApproved": "Nur genehmigte Benutzer",
@@ -2279,6 +2337,9 @@ window.__ModuleLoader__.load({
         "account.proxyNote": "Betrifft nur dieses Konto. Der Kanal verbindet sich nach dem Speichern automatisch neu.",
         "account.proxySaved": "Eine Proxy-Adresse ist gespeichert. Feld leer lassen, um sie beizubehalten.",
         "account.proxyUrl": "Proxy-Adresse",
+        "account.wecomWsUrl": "WebSocket URL",
+        "account.wecomWsUrlNote": "Geben Sie eine benutzerdefinierte WebSocket-URL für On-Premise-Bereitstellungen ein oder lassen Sie das Feld leer für den offiziellen Standard; verbindet sich nach dem Speichern automatisch neu.",
+        "account.wecomWsUrlPlaceholder": "Standard: wss://openws.work.weixin.qq.com",
         "account.receive": "Nachrichten empfangen",
         "account.receiveDescription": "Ausschalten, um Kontoeinstellungen zu behalten, ohne neue Nachrichten zu empfangen",
         "account.remark": "Namensnotiz",
@@ -2320,7 +2381,7 @@ window.__ModuleLoader__.load({
         "account.telegramGroupPolicyNote": "Gilt nur für Gruppen dieses Kontos. Um reguläre Nachrichten zu empfangen, ernennen Sie den Bot zum Admin oder deaktivieren Sie den Datenschutzmodus in @BotFather (/setprivacy → Disable).",
         "account.telegramThinkingDisplay": "Denkprozess anzeigen",
         "account.telegramThinkingDisplayCollapsed": "Eingeklappt",
-        "account.telegramThinkingDisplayNote": "Wenn aktiviert, wird das Reasoning als einklappbarer Zitatblock gesendet, der angetippt werden kann. Alle Gruppenmitglieder können ihn einsehen.",
+        "account.telegramThinkingDisplayNote": "Wenn aktiviert, wird das Reasoning als einklappbarer Block gesendet, der angetippt werden kann. Alle Gruppenmitglieder können ihn einsehen.",
         "account.telegramThinkingDisplayOff": "Aus",
         "account.threadSessions": "Thread-Sitzungsisolation",
         "account.threadSessionsIsolated": "Isolierte Sitzungen",
@@ -2477,6 +2538,8 @@ window.__ModuleLoader__.load({
         "field.telegram.token": "Bot Token",
         "field.wecom.botId": "Bot ID",
         "field.wecom.secret": "Secret",
+        "field.wecom.wsUrl": "WebSocket URL",
+        "field.wecom.wsUrl.placeholder": "Standard: wss://openws.work.weixin.qq.com",
         "hover.copied": "Kopiert",
         "loading": "Wird geladen…",
         "pending.notice": "Es liegen Zugriffsanfragen vor. Genehmigen Sie Benutzer, damit sie den lokalen Assistenten steuern können.",
@@ -2603,6 +2666,9 @@ window.__ModuleLoader__.load({
         "account.currentWorkspace": "Текущая рабочая область",
         "account.defaultName": "Аккаунт {channel} {count}",
         "account.presetUnavailable": "Пресет недоступен",
+        "account.groupAccess": "Доступ к группам",
+        "account.groupAll": "Разрешить всем участникам",
+        "account.groupDisabled": "Отключить группы",
         "account.privateAccess": "Доступ к личным сообщениям",
         "account.privateAll": "Разрешить всем пользователям в ЛС",
         "account.privateApproved": "Только одобренные пользователи",
@@ -2613,6 +2679,9 @@ window.__ModuleLoader__.load({
         "account.proxyNote": "Влияет только на этот аккаунт. Канал автоматически переподключается после сохранения.",
         "account.proxySaved": "Адрес прокси сохранен. Оставьте поле пустым, чтобы сохранить его.",
         "account.proxyUrl": "Адрес прокси",
+        "account.wecomWsUrl": "WebSocket URL",
+        "account.wecomWsUrlNote": "Укажите пользовательский URL WebSocket для локального развертывания или оставьте пустым для официального адреса по умолчанию; переподключается автоматически после сохранения.",
+        "account.wecomWsUrlPlaceholder": "По умолчанию: wss://openws.work.weixin.qq.com",
         "account.receive": "Прием сообщений",
         "account.receiveDescription": "Отключите, чтобы сохранить настройки аккаунта без приема новых сообщений",
         "account.remark": "Примечание к имени",
@@ -2654,7 +2723,7 @@ window.__ModuleLoader__.load({
         "account.telegramGroupPolicyNote": "Влияет только на группы этого аккаунта. Чтобы бот получал обычные сообщения, сделайте его администратором или отключите режим конфиденциальности в @BotFather (/setprivacy → Disable).",
         "account.telegramThinkingDisplay": "Отображение хода мыслей",
         "account.telegramThinkingDisplayCollapsed": "Свернуто",
-        "account.telegramThinkingDisplayNote": "Если включено, ход мыслей отправляется в виде сворачиваемого цитатного блока. Все участники группы могут развернуть и просмотреть его.",
+        "account.telegramThinkingDisplayNote": "Если включено, ход мыслей отправляется в виде сворачиваемого блока. Все участники группы могут развернуть и просмотреть его.",
         "account.telegramThinkingDisplayOff": "Выкл",
         "account.threadSessions": "Изоляция сессий тредов",
         "account.threadSessionsIsolated": "Изолированные сессии",
@@ -2811,6 +2880,8 @@ window.__ModuleLoader__.load({
         "field.telegram.token": "Bot Token",
         "field.wecom.botId": "Bot ID",
         "field.wecom.secret": "Secret",
+        "field.wecom.wsUrl": "WebSocket URL",
+        "field.wecom.wsUrl.placeholder": "По умолчанию: wss://openws.work.weixin.qq.com",
         "hover.copied": "Скопировано",
         "loading": "Загрузка…",
         "pending.notice": "Есть запросы на доступ. Одобрите пользователя, чтобы он мог взаимодействовать с локальным ассистентом.",
@@ -2937,6 +3008,9 @@ window.__ModuleLoader__.load({
         "account.currentWorkspace": "Espaço de trabalho atual",
         "account.defaultName": "Conta do {channel} {count}",
         "account.presetUnavailable": "Predefinição indisponível",
+        "account.groupAccess": "Acesso a grupos",
+        "account.groupAll": "Permitir todos os membros",
+        "account.groupDisabled": "Desativar grupos",
         "account.privateAccess": "Acesso ao chat privado",
         "account.privateAll": "Permitir todos os usuários em DM",
         "account.privateApproved": "Apenas usuários aprovados",
@@ -2947,6 +3021,9 @@ window.__ModuleLoader__.load({
         "account.proxyNote": "Afeta apenas esta conta. O canal reconecta automaticamente após salvar.",
         "account.proxySaved": "Um endereço de proxy foi salvo. Deixe em branco para mantê-lo.",
         "account.proxyUrl": "Endereço do proxy",
+        "account.wecomWsUrl": "WebSocket URL",
+        "account.wecomWsUrlNote": "Insira uma URL WebSocket personalizada para implantações locais ou deixe em branco para o padrão oficial; reconecta automaticamente após salvar.",
+        "account.wecomWsUrlPlaceholder": "Padrão: wss://openws.work.weixin.qq.com",
         "account.receive": "Receber mensagens",
         "account.receiveDescription": "Desative para manter as configurações da conta sem receber novas mensagens",
         "account.remark": "Observação do nome",
@@ -2988,7 +3065,7 @@ window.__ModuleLoader__.load({
         "account.telegramGroupPolicyNote": "Aplica-se apenas aos grupos desta conta. Para receber mensagens normais, torne o bot administrador ou desative o modo de privacidade no @BotFather (/setprivacy → Disable).",
         "account.telegramThinkingDisplay": "Exibir processo de pensamento",
         "account.telegramThinkingDisplayCollapsed": "Recolhido",
-        "account.telegramThinkingDisplayNote": "Quando ativado, o raciocínio é enviado como um bloco de citação expansível que pode ser aberto com um toque. Visível para todos no grupo.",
+        "account.telegramThinkingDisplayNote": "Quando ativado, o raciocínio é enviado como um bloco expansível que pode ser aberto com um toque. Visível para todos no grupo.",
         "account.telegramThinkingDisplayOff": "Desactivado",
         "account.threadSessions": "Isolamento de sessões de tópicos",
         "account.threadSessionsIsolated": "Sessões isoladas",
@@ -3145,6 +3222,8 @@ window.__ModuleLoader__.load({
         "field.telegram.token": "Bot Token",
         "field.wecom.botId": "Bot ID",
         "field.wecom.secret": "Secret",
+        "field.wecom.wsUrl": "WebSocket URL",
+        "field.wecom.wsUrl.placeholder": "Padrão: wss://openws.work.weixin.qq.com",
         "hover.copied": "Copiado",
         "loading": "Carregando…",
         "pending.notice": "Existem solicitações de acesso. Aprove um usuário para permitir que ele controle o assistente local.",
@@ -3490,33 +3569,81 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
 
     let requestHostSessionRefresh = () => {};
     let channelSessionIds = new Set();
+    let channelDraftIds = new Set();
     let channelSessionChannels = new Map();
+    let channelSessionAccounts = new Map();
+    let channelAccountMeta = new Map();
     let channelMembershipRevision = 0;
     const channelMembershipListeners = new Set();
+    function parsePlatformFromChannelId(id) {
+      const val = String(id || "");
+      const split = val.indexOf("_");
+      return split > 0 ? val.slice(0, split) : val;
+    }
+    const isImSessionPrefix = (id) => {
+      const val = String(id || "");
+      return val.startsWith("dsh-im-session-") || val.startsWith("im:");
+    };
     function updateChannelMembership(groups) {
       const next = new Set();
+      const drafts = new Set();
       const channels = new Map();
-      for (const group of groups) {
+      const accounts = new Map();
+      const meta = new Map();
+      for (const group of groups || []) {
+        const platform = group.platform || parsePlatformFromChannelId(group.id);
+        const accountId = group.accountId || group.id;
+        meta.set(accountId, {
+          id: accountId,
+          accountId,
+          platform,
+          label: group.label || "",
+        });
         for (const session of group.sessions || []) {
+          const id = String(session.sessionId);
           next.add(session.sessionId);
-          channels.set(String(session.sessionId), group.id);
+          if (!session.adopted && !session.detached && isImSessionPrefix(id)) drafts.add(id);
+          channels.set(id, platform);
+          accounts.set(id, accountId);
         }
       }
-      let changed = next.size !== channelSessionIds.size || [...next].some(id => !channelSessionIds.has(id));
+      let changed = next.size !== channelSessionIds.size || [...next].some(id => !channelSessionIds.has(id))
+        || drafts.size !== channelDraftIds.size || [...drafts].some(id => !channelDraftIds.has(id));
       if (!changed) {
         for (const [id, channel] of channels) {
           if (channelSessionChannels.get(id) !== channel) { changed = true; break; }
         }
       }
+      if (!changed) {
+        for (const [id, account] of accounts) {
+          if (channelSessionAccounts.get(id) !== account) { changed = true; break; }
+        }
+      }
+      if (!changed) {
+        if (meta.size !== channelAccountMeta.size) {
+          changed = true;
+        } else {
+          for (const [id, item] of meta) {
+            const prev = channelAccountMeta.get(id);
+            if (!prev || prev.label !== item.label || prev.platform !== item.platform) {
+              changed = true;
+              break;
+            }
+          }
+        }
+      }
       if (changed) {
         channelSessionIds = next;
+        channelDraftIds = drafts;
         channelSessionChannels = channels;
+        channelSessionAccounts = accounts;
+        channelAccountMeta = meta;
         channelMembershipRevision += 1;
         for (const listener of channelMembershipListeners) listener();
       }
       try { requestHostSessionRefresh(changed); } catch { /* 下次频道轮询继续重试 */ }
     }
-    /** IM 会话 ID 包含账号实例；接口映射兼容沿用普通 ID 的已接入会话。 */
+    /** IM 会话 ID 所属渠道平台（如 weixin/feishu），供会话行图标展示。 */
     function channelIdOfSession(sessionId) {
       const value = String(sessionId || "");
       const mapped = channelSessionChannels.get(value);
@@ -3529,10 +3656,21 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
       const platform = instance.split("_", 1)[0];
       return platform || undefined;
     }
+    /** IM 会话 ID 所属具体账号实例（如 feishu_1）。 */
+    function accountIdOfSession(sessionId) {
+      const value = String(sessionId || "");
+      const mapped = channelSessionAccounts.get(value);
+      if (mapped) return mapped;
+      if (!value.startsWith("im:")) return channelSessionChannels.get(value);
+      const rest = value.slice(3);
+      const split = rest.indexOf(":");
+      const instance = split > 0 ? rest.slice(0, split) : rest;
+      return instance || undefined;
+    }
     // 新旧两代 IM 前缀都要认，否则存量会话升级后会掉出渠道页签。
     const isChannelSession = (id) => {
-      const value = String(id);
-      return value.startsWith("dsh-im-session-") || value.startsWith("im:") || channelSessionIds.has(value);
+      const value = String(id || "");
+      return isImSessionPrefix(value) || channelSessionIds.has(value);
     };
     const subscribeChannelMembership = (listener) => {
       channelMembershipListeners.add(listener);
@@ -3795,6 +3933,12 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
       const translated = t(key);
       return translated === key ? field.label : translated;
     }
+    function fieldPlaceholder(ch, field, t) {
+      const key = "field." + ch.id + "." + field.key + ".placeholder";
+      const translated = t(key);
+      if (translated !== key) return translated;
+      return field.placeholder || fieldLabel(ch, field, t);
+    }
     function hintOf(ch, t) {
       const key = "qr." + ch.id;
       const translated = t(key);
@@ -4039,6 +4183,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
           reasoningEffort: assistant && assistant.reasoningEffort || "",
           permission: defaults && defaults.permission || "",
           privateAccess: "approved",
+          groupAccess: "all",
           sendMode: "queue",
           segmentReply: false,
           segmentDelayMinSecs: 1,
@@ -4273,7 +4418,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
             h(Input, {
               type: f.secret ? "password" : "text",
               value: draft[f.key] || "",
-              placeholder: fieldLabel(ch, f, t),
+              placeholder: fieldPlaceholder(ch, f, t),
               onChange: (e) => setDraft({ ...draft, [f.key]: e.target.value }),
             }),
           )),
@@ -4352,7 +4497,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
 
     function filterAccountPlatformPayload(platform, patch, payload) {
       const result = payload || {};
-      if (platform === "telegram" || platform === "feishu" || platform === "lark") {
+      if (platform === "feishu" || platform === "lark") {
         if (Object.prototype.hasOwnProperty.call(patch, "thinkingDisplay")) {
           result.thinkingDisplay = patch.thinkingDisplay;
         }
@@ -4360,6 +4505,11 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
       if (platform === "feishu" || platform === "lark") {
         if (Object.prototype.hasOwnProperty.call(patch, "threadSessions")) {
           result.threadSessions = patch.threadSessions;
+        }
+      }
+      if (platform === "wecom") {
+        if (Object.prototype.hasOwnProperty.call(patch, "wsUrl")) {
+          result.wsUrl = patch.wsUrl;
         }
       }
       return result;
@@ -4391,6 +4541,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
       const cwd = value.cwd || "";
       const permission = value.permission || "";
       const privateAccess = value.privateAccess === "all" ? "all" : "approved";
+      const groupAccess = value.groupAccess === "approved" || value.groupAccess === "disabled" ? value.groupAccess : "all";
       const sendMode = value.sendMode === "steer" ? "steer" : "queue";
       const segmentSupported = typeof props.segmentReplySupported === "boolean"
         ? props.segmentReplySupported
@@ -4691,6 +4842,17 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
             { value: "all", label: t("account.privateAll") },
           ],
           onChange: (next) => update({ privateAccess: next }),
+        })),
+        field("group", t("account.groupAccess"), h(Select, {
+          className: "ima-account-picker",
+          value: groupAccess,
+          "aria-label": t("account.groupAccess"),
+          options: [
+            { value: "all", label: t("account.groupAll") },
+            { value: "approved", label: t("account.privateApproved") },
+            { value: "disabled", label: t("account.groupDisabled") },
+          ],
+          onChange: (next) => update({ groupAccess: next }),
         })),
         field("sendMode", t("account.sendMode"), h(Select, {
           className: "ima-account-picker",
@@ -5271,6 +5433,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
       const [draft, setDraft] = useState(account);
       const [proxyModeDraft, setProxyModeDraft] = useState(account.proxyMode || "inherit");
       const [proxyUrlDraft, setProxyUrlDraft] = useState(account.proxyUrl || "");
+      const [wsUrlDraft, setWsUrlDraft] = useState(account.wsUrl || "");
       const [mentionPolicyDraft, setMentionPolicyDraft] = useState(
         account.mentionPolicy === "always" ? "always" : (account.freeChatGroups ? "custom" : "addressed")
       );
@@ -5316,7 +5479,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
         setDraft(account);
         setProxyModeDraft(account.proxyMode || "inherit");
         setNote("");
-      }, [account.id, account.cwd, account.permission, account.agentPreset, account.privateAccess, account.sendMode, account.sessionIdleMinutes, account.segmentReply, account.segmentDelayMinSecs, account.segmentDelayMaxSecs, account.proxyMode, account.proxyConfigured, JSON.stringify(account.commandPermissions), account.receiveEnabled, account.threadSessions, account.assistant && account.assistant.provider, account.assistant && account.assistant.model, account.assistant && account.assistant.reasoningEffort, account.thinkingDisplay]);
+      }, [account.id, account.cwd, account.permission, account.agentPreset, account.privateAccess, account.sendMode, account.groupAccess, account.sessionIdleMinutes, account.segmentReply, account.segmentDelayMinSecs, account.segmentDelayMaxSecs, account.proxyMode, account.proxyConfigured, JSON.stringify(account.commandPermissions), account.receiveEnabled, account.threadSessions, account.assistant && account.assistant.provider, account.assistant && account.assistant.model, account.assistant && account.assistant.reasoningEffort, account.thinkingDisplay]);
       useEffect(() => {
         if (accountIdRef.current !== account.id) {
           accountIdRef.current = account.id;
@@ -5327,6 +5490,9 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
       useEffect(() => {
         setProxyUrlDraft(account.proxyUrl || "");
       }, [account.id, account.proxyUrl]);
+      useEffect(() => {
+        setWsUrlDraft(account.wsUrl || "");
+      }, [account.id, account.wsUrl]);
       const save = (patch) => {
         const seq = ++saveSeq.current;
         const previous = draft;
@@ -5342,6 +5508,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
           reasoningEffort: next.assistant.reasoningEffort || null,
           permission: next.permission,
           privateAccess: next.privateAccess,
+          groupAccess: next.groupAccess,
           sendMode: next.sendMode,
           sessionIdleMinutes: Number.isFinite(next.sessionIdleMinutes) ? Math.max(0, Math.round(next.sessionIdleMinutes)) : 0,
           segmentReply: next.segmentReply === true,
@@ -5374,6 +5541,11 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
           if (platform === "feishu" || platform === "lark") {
             if (Object.prototype.hasOwnProperty.call(patch, "threadSessions")) {
               res.threadSessions = patch.threadSessions;
+            }
+          }
+          if (platform === "wecom") {
+            if (Object.prototype.hasOwnProperty.call(patch, "wsUrl")) {
+              res.wsUrl = patch.wsUrl;
             }
           }
           return res;
@@ -5428,7 +5600,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
           h(AccountSettingsPicker, {
             value: draft,
             onChange: applySettings,
-            thinkingDisplaySupported: account.platform === "telegram" || account.platform === "feishu" || account.platform === "lark",
+            thinkingDisplaySupported: account.platform === "feishu" || account.platform === "lark",
             threadSessionsSupported: account.platform === "feishu" || account.platform === "lark",
             segmentReplySupported: account.segmentReplySupported !== false,
             catalog,
@@ -5527,6 +5699,32 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
               return h("div", { className: "ima-picker-note warning" }, t(key, { count: issues.invalid }));
             })(),
             h("div", { className: "ima-picker-note" }, t("account.telegramGroupPolicyNote")),
+          ),
+          account.platform === "wecom" && h("div", { className: "ima-wecom-settings" },
+            h("label", { className: "ima-picker-field wide" },
+              h("span", { className: "ima-picker-label" }, t("account.wecomWsUrl")),
+              h(Input, {
+                type: "text",
+                value: wsUrlDraft,
+                placeholder: t("account.wecomWsUrlPlaceholder"),
+                "aria-label": t("account.wecomWsUrl"),
+                onChange: (event) => setWsUrlDraft(event.target.value),
+                onBlur: (event) => {
+                  const value = event.target.value.trim();
+                  if (value === (account.wsUrl || "")) return;
+                  save({ wsUrl: value }).then((ok) => {
+                    if (ok && !value) setWsUrlDraft("");
+                  });
+                },
+                onKeyDown: (event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  }
+                },
+              }),
+            ),
+            h("div", { className: "ima-picker-note" }, t("account.wecomWsUrlNote")),
           ),
           h("details", { className: "ima-command-advanced" },
             h("summary", null, t("command.advanced")),
@@ -5915,7 +6113,6 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
     // ---------------------------------------------------------------------
 
     const CHANNEL_WORKSPACE_PREFIX = "dsh-im-channel:";
-    const CHANNEL_GROUP_IDS = ["weixin", "wecom", "qq", "feishu", "lark", "dingtalk", "telegram", "discord", "slack"];
     const EMPTY_SESSION_STATE = { ids: [], byId: {}, current: null };
     const EMPTY_WORKSPACE_STATE = { items: [], archivedSessionIds: [], pinnedSessionIds: [], state: "idle", phase: "ready", error: null };
     const CHANNEL_GROUP_OPTION_ATTR = "data-ima-channel-group-option";
@@ -6031,28 +6228,54 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
     const channelSyntheticWorkspaceCache = new WeakMap();
     const channelRealWorkspaceCache = new WeakMap();
 
-    /** 只保留 /channels 分组里的会话，避免官方树出现“未分组”桶。 */
-    function channelMemberSessionState(state, memberIds) {
+    /** 只保留频道会话，并让本频道的当前草稿可打开，不改宿主原始快照。 */
+    function channelMemberSessionState(state, memberIds, draftIds) {
       const src = state || EMPTY_SESSION_STATE;
       const hit = channelSessionStateCache.get(src);
-      if (hit && hit.ids === memberIds) return hit.result;
+      if (hit && hit.ids === memberIds && hit.draftIds === draftIds) return hit.result;
       const ids = (src.ids || []).filter((id) => memberIds.has(String(id)));
-      const result = cacheFilteredSessions(src, ids);
-      channelSessionStateCache.set(src, { ids: memberIds, result });
+      const filtered = cacheFilteredSessions(src, ids);
+      let byId;
+      for (const id of ids) {
+        const row = filtered.byId?.[id];
+        if (!row?.blank || !draftIds?.has(String(id))) continue;
+        byId ??= Object.assign({}, filtered.byId);
+        byId[id] = Object.assign({}, row, { blank: false });
+      }
+      const result = byId ? Object.assign({}, filtered, { byId }) : filtered;
+      channelSessionStateCache.set(src, { ids: memberIds, draftIds, result });
       return result;
     }
 
     function channelGroupsFromSessionState(state, t) {
-      const groups = new Map(CHANNEL_GROUP_IDS.map((id) => [id, {
-        id,
-        label: channelLabel({ id }, t),
-        sessions: [],
-      }]));
+      const groups = new Map();
+      const metaMap = channelAccountMeta;
+      for (const [accountId, meta] of metaMap) {
+        groups.set(accountId, {
+          id: accountId,
+          platform: meta.platform,
+          label: meta.label || channelLabel({ id: meta.platform }, t),
+          sessions: [],
+        });
+      }
       const src = state || EMPTY_SESSION_STATE;
       for (const id of src.ids || []) {
-        const group = groups.get(channelIdOfSession(id));
+        const platform = channelIdOfSession(id);
+        if (!platform) continue;
+        const accountId = accountIdOfSession(id) || platform;
+        let group = groups.get(accountId);
+        if (!group) {
+          const meta = metaMap.get(accountId);
+          group = {
+            id: accountId,
+            platform,
+            label: (meta && meta.label) || channelLabel({ id: platform }, t),
+            sessions: [],
+          };
+          groups.set(accountId, group);
+        }
         const session = src.byId && src.byId[id];
-        if (group && session) group.sessions.push({ sessionId: id, updatedAt: session.updatedAt });
+        if (session) group.sessions.push({ sessionId: id, updatedAt: session.updatedAt });
       }
       return [...groups.values()].filter((group) => group.sessions.length > 0);
     }
@@ -6074,7 +6297,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
       const src = state || EMPTY_WORKSPACE_STATE;
       const key = groups.map((group) => [
         group.id,
-        channelLabel(group, t),
+        group.label || channelLabel(group, t),
         channelGroupCreatedAt(group),
         (group.sessions || []).map((session) => session.sessionId).join(","),
       ].join("\0")).join("\0\0");
@@ -6085,7 +6308,7 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
         return {
           workspaceId,
           id: workspaceId,
-          title: channelLabel(group, t),
+          title: group.label || channelLabel(group, t),
           path: "",
           sessionIds: (group.sessions || []).map((session) => session.sessionId),
           createdAt: channelGroupCreatedAt(group),
@@ -6111,8 +6334,6 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
       channelRealWorkspaceCache.set(src, { ids: memberIds, result });
       return result;
     }
-
-    let channelIconCssValue;
 
     /** 把 React 元素渲染成可直接注入官方 DOM 的 HTML。 */
     function channelMarkup(element) {
@@ -6140,33 +6361,13 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
     }
 
     const channelLogoUrlCache = new Map();
-    /** 频道品牌标 data URL，供分组头和会话行复用。 */
+    /** 频道品牌标 data URL，供工作区图标和会话行复用。 */
     function channelLogoUrl(id) {
       if (channelLogoUrlCache.has(id)) return channelLogoUrlCache.get(id);
       const markup = channelMarkup(h(BrandMark, { id, compact: true }));
       const url = markup ? `url("data:image/svg+xml,${encodeURIComponent(markup)}")` : "";
       channelLogoUrlCache.set(id, url);
       return url;
-    }
-
-    /** 频道分组头图标：用品牌标覆盖官方文件夹图标，并保持悬停时可见。 */
-    function channelIconCss() {
-      if (channelIconCssValue !== undefined) return channelIconCssValue;
-      if (typeof document === "undefined") {
-        channelIconCssValue = "";
-        return channelIconCssValue;
-      }
-      channelIconCssValue = CHANNEL_GROUP_IDS.map((id) => {
-        const logo = channelLogoUrl(id);
-        if (!logo) return "";
-        const row = `[data-row-key="workspace:${channelWorkspaceId(id)}"]`;
-        return `.ima-channel-official ${row}>span:first-child>svg{display:none!important}`
-          + `.ima-channel-official ${row}>span:first-child{display:inline-flex!important;background:${logo} center/contain no-repeat!important}`
-          // 宿主在悬停时用 chevron 换掉文件夹；频道分组保持品牌图标可见。
-          + `.ima-channel-official ${row}:hover>span:first-child{display:inline-flex!important}`
-          + `.ima-channel-official ${row}:hover>span:nth-child(2){display:none!important}`;
-      }).join("");
-      return channelIconCssValue;
     }
 
     let channelWorkspaceIconCache = { key: "", css: "" };
@@ -6206,6 +6407,55 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
     }
 
     /**
+     * 替换菜单项内的图标与文案，兼容各种带有嵌套包装、CSS Module 类名或纯结构节点的宿主 DOM。
+     */
+    function replaceMenuItemContent(button, templateText, label, icon) {
+      const ownerDoc = button.ownerDocument || (typeof document !== "undefined" ? document : null);
+      let iconContainer = button.querySelector('[class*="itemIcon"], [class*="Icon"]');
+      if (!iconContainer && button.firstElementChild) {
+        const first = button.firstElementChild;
+        const isSvg = first.tagName && first.tagName.toLowerCase() === "svg";
+        const isImg = first.tagName && first.tagName.toLowerCase() === "img";
+        if (isSvg || isImg || button.children.length > 1) {
+          iconContainer = first;
+        }
+      }
+      const isInsideIcon = (el) => iconContainer && typeof iconContainer.contains === "function" && iconContainer.contains(el);
+      const labelContainer = button.querySelector('[class*="itemLabel"], [class*="Label"]')
+        || [...button.querySelectorAll("span, div")].find((el) => el !== iconContainer && !isInsideIcon(el) && (el.textContent || "").trim() === templateText)
+        || (button.children.length > 1 ? button.children[1] : null)
+        || (button.lastElementChild !== iconContainer ? button.lastElementChild : null);
+
+      if (icon !== undefined) {
+        if (!iconContainer && ownerDoc && typeof ownerDoc.createElement === "function") {
+          iconContainer = ownerDoc.createElement("span");
+          if (typeof iconContainer.setAttribute === "function") {
+            iconContainer.setAttribute("class", "ima-menu-item-icon");
+            iconContainer.setAttribute("aria-hidden", "true");
+          }
+          button.insertBefore(iconContainer, button.firstChild);
+        }
+        if (iconContainer) {
+          iconContainer.innerHTML = icon;
+        }
+      }
+      if (labelContainer && labelContainer !== iconContainer) {
+        labelContainer.textContent = label;
+      } else {
+        const remaining = [...button.children].filter((el) => el !== iconContainer);
+        if (remaining.length >= 1) {
+          remaining[0].textContent = label;
+        } else if (ownerDoc && typeof ownerDoc.createElement === "function") {
+          const textNode = ownerDoc.createElement("span");
+          textNode.textContent = label;
+          button.appendChild(textNode);
+        } else {
+          button.textContent = label;
+        }
+      }
+    }
+
+    /**
      * 官方视图选项菜单没有扩展位，注入第四个分组项「按频道」。
      * 只在频道页签挂载期间生效。
      */
@@ -6231,11 +6481,11 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
         button.removeAttribute("disabled");
         button.disabled = false;
         button.classList.remove("danger");
-        for (const svg of button.querySelectorAll(":scope > svg")) svg.remove();
-        const spans = button.querySelectorAll("span");
-        if (spans[0] !== undefined) spans[0].innerHTML = channelMarkup(h(IconQueueOutline, { size: 16 }));
-        if (spans[1] !== undefined) spans[1].textContent = options.label;
-        else button.textContent = options.label;
+        for (const child of [...button.children]) {
+          if (child.tagName && child.tagName.toLowerCase() === "svg") child.remove();
+        }
+        for (const check of button.querySelectorAll('[class*="check"], svg[class*="check"]')) check.remove();
+        replaceMenuItemContent(button, (first.textContent || "").trim(), options.label, channelMarkup(h(IconQueueOutline, { size: 16 })));
         if (options.checked) {
           const check = document.createElement("span");
           check.innerHTML = channelMarkup(h(IconCheckOutline, { size: 16 }));
@@ -6292,23 +6542,53 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
         }
         if (target.closest('[role="menu"]') === null) channelId = undefined;
       };
-      const hiddenItems = new Map();
+      const hiddenElements = new Map();
+      const hideElement = (el) => {
+        if (!el || typeof el.getAttribute !== "function") return;
+        if (!hiddenElements.has(el)) {
+          hiddenElements.set(el, {
+            display: el.style.display || "",
+            ariaHidden: el.getAttribute("aria-hidden"),
+          });
+        }
+        el.style.display = "none";
+        el.setAttribute("aria-hidden", "true");
+      };
+      const purgeDetached = () => {
+        for (const el of hiddenElements.keys()) {
+          if (typeof document.contains === "function" && !document.contains(el)) {
+            hiddenElements.delete(el);
+          }
+        }
+      };
       const hideOthers = (menu, ours) => {
+        purgeDetached();
         for (const item of menu.querySelectorAll('button[role="menuitem"]')) {
           if (ours.has(item)) continue;
-          if (!hiddenItems.has(item)) {
-            hiddenItems.set(item, {
-              display: item.style.display,
-              ariaHidden: item.getAttribute("aria-hidden"),
-            });
+          hideElement(item);
+          const wrapper = item.parentElement;
+          if (wrapper && wrapper !== menu && wrapper.parentElement === menu) {
+            let containsOurs = false;
+            for (const o of ours) {
+              if (typeof wrapper.contains === "function" && wrapper.contains(o)) {
+                containsOurs = true;
+                break;
+              }
+            }
+            if (!containsOurs) hideElement(wrapper);
           }
-          item.style.display = "none";
-          item.setAttribute("aria-hidden", "true");
+        }
+        for (const sep of menu.querySelectorAll('[role="separator"], hr, [class*="separator"], [class*="divider"]')) {
+          hideElement(sep);
         }
       };
       const inject = (menu) => {
         if (channelId === undefined || performance.now() - rememberedAt > 2000) return;
-        if (menu.querySelector(`[${CHANNEL_GROUP_MENU_ATTR}="true"]`) !== null) return;
+        const existing = menu.querySelector(`button[${CHANNEL_GROUP_MENU_ATTR}="true"]`);
+        if (existing !== null) {
+          hideOthers(menu, new Set([existing]));
+          return;
+        }
         const items = [...menu.querySelectorAll('button[role="menuitem"]')];
         if (items.length === 0) return;
         const menuText = items.map((item) => item.textContent || "").join(" ");
@@ -6328,15 +6608,15 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
           button.removeAttribute(CHANNEL_GROUP_MENU_ATTR);
           button.removeAttribute("aria-disabled");
           button.removeAttribute("disabled");
+          button.removeAttribute("aria-keyshortcuts");
+          button.removeAttribute("aria-describedby");
           button.disabled = false;
           button.style.opacity = "";
           button.style.cursor = "";
           button.classList.remove("danger");
           button.setAttribute(CHANNEL_GROUP_MENU_ATTR, "true");
-          const spans = button.querySelectorAll("span");
-          if (spans[0] !== undefined) spans[0].innerHTML = icon;
-          if (spans[1] !== undefined) spans[1].textContent = label;
-          else button.textContent = label;
+          for (const extra of button.querySelectorAll('[class*="check"], [class*="shortcut"]')) extra.remove();
+          replaceMenuItemContent(button, (template.textContent || "").trim(), label, icon);
           let fired = false;
           const activate = (event) => {
             if (fired) return;
@@ -6377,12 +6657,12 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
         observer.disconnect();
         document.removeEventListener("pointerdown", remember, true);
         document.removeEventListener("click", remember, true);
-        for (const [item, previous] of hiddenItems) {
-          item.style.display = previous.display;
-          if (previous.ariaHidden === null) item.removeAttribute("aria-hidden");
-          else item.setAttribute("aria-hidden", previous.ariaHidden);
+        for (const [el, previous] of hiddenElements) {
+          el.style.display = previous.display;
+          if (previous.ariaHidden === null) el.removeAttribute("aria-hidden");
+          else el.setAttribute("aria-hidden", previous.ariaHidden);
         }
-        hiddenItems.clear();
+        hiddenElements.clear();
         for (const item of document.querySelectorAll(`[${CHANNEL_GROUP_MENU_ATTR}="true"]`)) item.parentElement?.remove();
       };
     }
@@ -6437,17 +6717,12 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
       const groups = useMemo(() => channelGroupsFromSessionState(sessionSource, t), [membershipRevision, sessionSource, t]);
       const groupsRef = useRef(groups);
       groupsRef.current = groups;
-      const [channelIcons, setChannelIcons] = useState("");
       const [workspaceIcons, setWorkspaceIcons] = useState("");
       const open = props.openSession || hostProps.open || hostProps.openSession;
       const openChannelSettings = props.openChannelSettings || hostProps.openChannelSettings;
       const openImSettings = props.openImSettings || hostProps.openImSettings || (() => openImSettingsPage(t));
 
       useEffect(() => { ensureStyle(); }, []);
-
-      useEffect(() => {
-        if (groupBy === "channel" && channelIcons === "") setChannelIcons(channelIconCss());
-      }, [channelIcons, groupBy]);
 
       const memberKey = groups.map((group) => group.id + ":" + (group.sessions || []).map((session) => session.sessionId).join(",")).join("|");
       const memberIds = useMemo(() => {
@@ -6458,10 +6733,11 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
         return ids;
       }, [memberKey]);
 
+      const draftIds = channelDraftIds;
       const useChannelSessions = useCallback((selector, equals) => {
         if (typeof rawUseSessions !== "function") return selector(EMPTY_SESSION_STATE);
-        return rawUseSessions((state) => selector(channelMemberSessionState(state, memberIds)), equals);
-      }, [memberIds, rawUseSessions]);
+        return rawUseSessions((state) => selector(channelMemberSessionState(state, memberIds, draftIds)), equals);
+      }, [memberIds, draftIds, rawUseSessions]);
 
       const useChannelWorkspaces = useCallback((selector, equals) => {
         if (typeof rawUseWorkspaces !== "function") return selector(EMPTY_WORKSPACE_STATE);
@@ -6516,7 +6792,11 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
         resolve: (channelId) => groupsRef.current.find((group) => group.id === channelId),
         onSettings: (group) => {
           if (typeof openChannelSettings === "function") {
-            openChannelSettings({ channelId: group.id, name: channelLabel(group, t) });
+            openChannelSettings({
+              channelId: group.platform || group.id,
+              accountId: group.accountId || group.id,
+              name: group.label || channelLabel(group, t),
+            });
             return;
           }
           openImSettings();
@@ -6584,7 +6864,6 @@ body:not([data-ds-dark-theme]) .ima-section-card{background:var(--dsw-alias-bg-l
 
       return h(React.Fragment, null,
         h("div", { className: "ima-channel-official", "data-mode": groupBy },
-          groupBy === "channel" && channelIcons !== "" && h("style", null, channelIcons),
           groupBy !== "channel" && workspaceIcons !== "" && h("style", null, workspaceIcons),
           // 宿主列表失败时 phase 仍停在 pending，没有横幅就是整页空白。
           groupsError && h("div", { className: "ima-channel-error", role: "alert" }, t("error.load")),

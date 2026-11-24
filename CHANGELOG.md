@@ -9,6 +9,77 @@
 - **Settings editor**: The account settings dialog now provides per-scope default rules, user exception rows and command lists, saved atomically with the account.
 - **Command discovery and save protection**: The settings editor now suggests basic Host commands from the current bound session, falls back to built-in candidates when unavailable, and adds unsaved-change confirmation and field-level validation.
 
+## [1.0.53] - 2026-11-24
+
+### Account-Level Group Chat Access Policies (#96)
+
+- **Configurable group chat access policies (#96)**: Added a "Group chat access" setting for bot accounts, allowing administrators to choose between "All group members" (default), "Approved users only", and "Disabled". In "Approved users only" mode, only whitelisted users can trigger the bot by mentioning it, while unauthorized mentions are silently ignored to prevent unwanted task execution in shared enterprise groups.
+- **Seamless backward compatibility**: Existing accounts retain their current behavior ("All group members") by default without configuration changes.
+
+### Telegram Status Line Formatting & Markdown Escaping (#97, #98)
+
+- **Reliable Telegram status and tool progress messages (#97, #98)**: Escaped reserved Markdown formatting characters (including backslashes, underscores, asterisks, brackets, tildes, and backticks) in status line prefixes and tool execution notices, preventing Telegram Markdown parse errors and delivery failures.
+
+### Workspace Session Isolation & Startup Reliability (#88, #99)
+
+- **Clean workspace session creation (#88, #99)**: Further refined the workspace attachment mechanisms during startup to guarantee that clicking "New Session" in an ordinary workspace never inadvertently jumps into or reuses a blank IM channel draft.
+
+### Remove Collapsible Thinking Option for Telegram (#89, #90)
+
+- **Disable Telegram collapsible thinking (#89, #90)**: Removed the collapsible thinking display setting for Telegram accounts to provide a consistent and stable messaging experience. Existing account configurations set to collapsed automatically fall back to off, while standard answers and progress indicators remain unaffected.
+- **Clarified thinking display guidance for Feishu and Lark**: Refined account setting descriptions to accurately represent collapsible thought bubbles and card displays on supported platforms.
+
+## [1.0.52] - 2026-11-23
+
+### Prevent Native Workspace Session Creation from Reusing Channel Drafts (#88)
+
+- **Isolated workspace session creation (#88)**: Fixed an issue where clicking "New Session" in an ordinary workspace inadvertently opened or reused a blank Telegram or IM channel session. Workspace session creation is now cleanly separated from channel sessions, preventing unexpected jumps into channel drafts.
+- **On-demand channel session attachment**: Unused blank channel drafts remain neatly in the sidebar Channels view without consuming workspace slots. Once the user sends the first message to start a conversation in a channel, the session seamlessly connects to the corresponding workspace, ensuring complete continuity.
+
+## [1.0.51] - 2026-11-23
+
+### Feishu Group Approval and Text Formatting Fidelity (#87)
+
+- **Reliable group tool approvals (#87)**: Fixed an issue where replying "@bot approve/agree/yes/deny" in Feishu group chats failed to decide pending tool approvals. Group replies mentioning the bot now trigger approval decisions properly, aligned with direct message interactions.
+- **Code indentation and layout fidelity**: Enhanced inbound message text normalization to strictly preserve code block indentation, multi-space alignments in SQL statements, paragraph breaks, and rich-text formatting without accidental flattening.
+
+## [1.0.50] - 2026-11-22
+
+### Delivery Reliability, Telegram Interaction & Model Error Diagnostics (#79, #81, #83, #85)
+
+- **Model error diagnostics in chat notifications (#85)**: When a model turn encounters an error (such as expired OAuth tokens, gateway disconnections, or network transport failures), the exact failure reason and diagnostic message are now cleanly appended to the failure notice, allowing operators to diagnose issues directly from the chat.
+- **Reliable task completion notices without duplicates (#79)**: Persists completion notices locally before submitting to Telegram. Pre-submit failures are safely retried, while post-submit timeouts or uncertain disconnections are marked unknown rather than blindly resent, preventing duplicate notice spam and lost notifications.
+- **Telegram question card reload recovery & native buttons (#81)**: Restores the authorized requester identity for active question turns after plugin reloads or restarts, ensuring questions continue to render Telegram native `inline_keyboard` buttons instead of falling back to plain text, while preserving private interaction options and unauthorized click protection.
+- **Telegram typing indicator rate-limit protection & renewal recovery (#83)**: Strictly honors server-provided 429 `retry_after` cooldowns across topics in the same base chat to avoid rate-limit escalations, and automatically coalesces renewal intervals missed during slow requests to keep typing and progress indicators active.
+- **Resilient offline multi-turn message recovery**: Accumulated and preserved all assistant reply segments within the same turn during offline or network disruption periods, ensuring complete and sequential recovery of all response parts upon reconnection.
+- **Oversized reply streaming & automatic cache cleanup**: Smoothly chunks and delivers responses exceeding 1MB without blocking delivery pipelines, and immediately releases cached text and slices from local storage once delivered to minimize disk footprint.
+
+## [1.0.49] - 2026-11-21
+
+### Sidebar Channel Sessions Grouped by Account Instance & Quick Settings (#78)
+
+- **Account-level session grouping**: When multiple accounts are configured for the same messaging platform, sidebar sessions are neatly organized into dedicated groups per account instance, preventing conversations across accounts from mixing together.
+- **Clear & intuitive group titles**: Displays a clean platform title (e.g., "WeChat", "WeCom") in single-account environments, and automatically appends account remarks or custom names (e.g., "WeChat · Support") in multi-account environments.
+- **Direct account settings via context menu**: Right-clicking any channel group heading now opens the settings and diagnostics panel for that specific account directly, making it faster to adjust credentials and remarks.
+- **Instant title refresh on remark change**: Updating an account's remark name immediately refreshes the sidebar group title in real time without requiring a reload or restart.
+- **Context menu presentation cleanup**: Fixed an issue where right-clicking a channel group could inadvertently leave the menu item labeled as "Rename", and eliminated extraneous blank space and divider lines at the bottom of the menu for a cleaner look.
+
+## [1.0.48] - 2026-11-20
+
+### WeCom Custom WebSocket URL for On-Premise Deployments (#76)
+
+- **Custom WebSocket URL support**: Added support for configuring a custom WebSocket URL (`ws://` or `wss://`) for WeCom (Work WeChat), enabling seamless connection to self-hosted gateway servers in on-premise environments.
+- **Graceful fallback to official default**: When left blank during credential setup or in account settings, WeCom automatically falls back to the official default address (`wss://openws.work.weixin.qq.com`).
+- **Dynamic configuration update & reconnection**: Existing WeCom accounts can inspect, modify, or clear the WebSocket URL at any time from the account settings panel, which automatically reconnects to apply changes upon saving.
+
+## [1.0.47] - 2026-11-20
+
+### Feishu & Lark Long Reasoning Display (#75)
+
+- **Complete streaming display for long reasoning chains**: Feishu and Lark native reasoning bubbles now support full streaming display for lengthy chains of thought with a generous 64K budget, eliminating premature truncation at 3,500 characters.
+- **Clear note for extremely long reasoning**: When reasoning output exceeds 65,536 characters, the initial 64K content is preserved cleanly with an informative truncation notice appended at the end.
+- **Card payload safety in message threads**: Collapsible reasoning cards in group threads and card fallbacks strictly enforce platform size constraints, ensuring stable presentation and preventing card delivery errors.
+
 ## [1.0.46] - 2026-11-19
 
 ### Host Compatibility Matrix & Stability

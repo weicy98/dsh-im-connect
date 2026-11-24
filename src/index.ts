@@ -7,7 +7,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { ChannelManager } from './manager.js'
-import type { EngineConfig } from './engine/types.js'
+import { DEFAULT_THINKING_MAX_CHARS, type EngineConfig } from './engine/types.js'
 import type { TopicMode } from './engine/topic-title.js'
 import { createRotatingFileAppender } from './engine/file-log.js'
 import { withReplyLocale } from './engine/command-locale.js'
@@ -60,8 +60,8 @@ export const Config: Schema<PluginConfig> = Schema.object({
     mode: Schema.union(['off', 'collapsed']).default('off').description('思考过程投递：off 关闭，collapsed 发成可折叠消息。'),
     minChars: Schema.number().default(120).description('累计到这个字数才发第一条思考消息。'),
     intervalMs: Schema.number().default(2000).description('两次思考消息刷新之间的最小间隔（毫秒）。'),
-    maxChars: Schema.number().default(3500).description('单条思考消息允许的最大字符数。'),
-  }).description('思考过程折叠消息；需要渠道实现 sendThinking（目前支持 Telegram、飞书与 Lark）。'),
+    maxChars: Schema.number().default(DEFAULT_THINKING_MAX_CHARS).description('单条思考消息允许的最大字符数（原生流式长思维链渠道如飞书除外，享有 64K 原生流式预算）。'),
+  }).description('思考过程折叠消息；需要渠道实现 sendThinking（目前支持飞书与 Lark；Telegram 始终关闭）。'),
 })
 
 export function apply(ctx: Context, config: PluginConfig): void {
@@ -134,9 +134,20 @@ export function apply(ctx: Context, config: PluginConfig): void {
   }, 'im-connect.segment-section')
   ctx.effect(() => {
     manager.registerApi(ctx)
-    // 卸载或初始化失败后不再恢复会话；保留一个完整异常链，避免后台拒绝终止宿主。
-    void manager.initEnabled().then(() => manager.attachMappedSessions()).catch(error => {
+    const reportStartupError = (error: unknown) => {
       fileLog.append(`${new Date().toISOString()} [boot] 初始化失败: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
+    const recovered = manager.initEnabled().then(() => manager.recoverMappedSessions())
+    void recovered.catch(reportStartupError)
+    // 工作区服务可能晚于 IM 启动，且无 Web 的宿主仍须恢复频道映射。
+    // sessionController 与 workspaceRegistry 是对齐工作区所必需的核心宿主服务；
+    // sessionQuery 用于深度穿透未带投影的冷会话，作为可选渐进增强在 router 内按需动态获取，避免非检索环境阻塞对齐。
+    ctx.inject(['sessionController', 'workspaceRegistry'], scope => {
+      scope.effect(() => {
+        let active = true
+        void recovered.then(() => manager.attachMappedSessions(() => active), () => {}).catch(reportStartupError)
+        return () => { active = false }
+      }, 'im-connect.reconcile-workspaces')
     })
     log(`[boot] apply 完成 ${Date.now() - applyStarted}ms`)
     return () => { manager.disposeApi(); void fileLog.flush() }

@@ -38,6 +38,19 @@ test('configuration requires opt-in, finite numbers, and clamps all bounds', () 
   assert.deepEqual(normalizeThinkingDisplay({ mode: 'invalid', minChars: 9000, intervalMs: 90000, maxChars: 9000 }), { mode: 'off', minChars: 4096, intervalMs: 60000, maxChars: 4096 })
 })
 
+test('Telegram ignores legacy collapsed settings without retaining or sending reasoning', async () => {
+  for (const channelId of ['telegram', 'telegram_1234567890ab']) {
+    const f = trackerFixture()
+    f.target.channel.id = channelId
+    f.tracker.start(f.target)
+    f.tracker.append(f.target, 'private reasoning')
+    await f.tracker.finish(f.target)
+    assert.equal(f.tracker.states.size, 0)
+    assert.deepEqual(f.sends, [])
+    assert.equal(f.tracker.identities.size, 0)
+  }
+})
+
 test('off and unsupported channels never retain any reasoning state', () => {
   for (const mode of ['off', 'unsupported']) {
     const f = trackerFixture()
@@ -257,3 +270,81 @@ test('gateway dynamically checks mute, binding, permission, cold turn, reload, u
     assert.equal(f.engine.thinking.states.size, 0, mode)
   }
 })
+
+test('thinking tracker adapts buffer limit for feishu/lark without clamping at 4096', () => {
+  for (const channelId of ['feishu', 'feishu_account123', 'lark_account456']) {
+    let now = 0
+    const sends = []
+    const tracker = new ThinkingDisplayTracker(() => {}, () => now)
+    const channel = { id: channelId, async sendThinking(chatId, text, options) { sends.push({ chatId, text, options }) } }
+    const target = {
+      key: `${channelId}:long:chain`,
+      sessionId: `session-${channelId}`,
+      chatId: 'oc_long',
+      channel,
+      turn: 1,
+      config: { mode: 'collapsed', minChars: 10 },
+      isCurrent: () => true,
+      label: (final, n) => `${final}:${n}`,
+    }
+    tracker.start(target)
+    // 注入 10000 字符思考
+    const longText = '深度推理长思维链。'.repeat(1000)
+    tracker.append(target, longText)
+    const state = [...tracker.states.values()][0]
+    assert.equal(state.prefix.length, longText.length, `${channelId}渠道思考前缀缓冲应完整容纳长文本，严禁在 4096 处封闭`)
+    assert.equal(state.closed, false, '未达安全上限前严禁封闭')
+    assert.equal(sends[0].options.truncated, false, '长思维链在安全预算内绝不标记 truncated: true')
+  }
+})
+
+test('thinking tracker: 流式分块切断高位代理时不误报截断 (truncated 仅代表 true closed)', () => {
+  let now = 0
+  const sends = []
+  const tracker = new ThinkingDisplayTracker(() => {}, () => now)
+  const channel = { id: 'tg', async sendThinking(chatId, text, options) { sends.push({ chatId, text, options }) } }
+  const target = {
+    key: 'tg:emoji:split',
+    sessionId: 'session-emoji',
+    chatId: 'oc_emoji',
+    channel,
+    turn: 1,
+    config: { mode: 'collapsed', minChars: 1 },
+    isCurrent: () => true,
+    label: (final, n) => `${final}:${n}`,
+  }
+  tracker.start(target)
+  // 输入一个末尾带有未拼接高位代理的 chunk（例如前缀 '测试' + '\uD83D'）
+  const splitChunk = '测试\uD83D'
+  tracker.append(target, splitChunk)
+  assert.ok(sends.length >= 1)
+  assert.equal(sends[0].options.truncated, false, '分块暂存高位代理未发生截断，严禁标记 truncated: true')
+})
+
+test('thinking tracker: 严格遵守渠道声明的更小 maxThinkingChars 预算，绝不被默认 maxChars 冲破', () => {
+  let now = 0
+  const sends = []
+  const tracker = new ThinkingDisplayTracker(() => {}, () => now)
+  // 渠道显式声明物理容量仅为 1000 字符
+  const channel = { id: 'tiny', maxThinkingChars: 1000, async sendThinking(chatId, text, options) { sends.push({ chatId, text, options }) } }
+  const target = {
+    key: 'tiny:budget:clamp',
+    sessionId: 'session-tiny',
+    chatId: 'oc_tiny',
+    channel,
+    turn: 1,
+    // 用户配置使用默认 3500 字符
+    config: { mode: 'collapsed', minChars: 10, maxChars: 3500 },
+    isCurrent: () => true,
+    label: (final, n) => `${final}:${n}`,
+  }
+  tracker.start(target)
+  const state = [...tracker.states.values()][0]
+  assert.equal(state.bufferLimit, 1000, '受限渠道容量上限必须锁定为渠道声明的 1000，不得被 3500 冲破')
+
+  // 注入 1500 字符
+  tracker.append(target, '字符'.repeat(750))
+  assert.equal(state.closed, true, '超过 1000 字符后应封闭')
+  assert.equal(state.prefix.length, 1000, '前缀长度不得超出 1000')
+})
+

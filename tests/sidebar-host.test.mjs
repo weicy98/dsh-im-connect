@@ -48,7 +48,7 @@ test('频道页默认按频道分组，并注入第四个分组选项', () => {
   assert.match(client, /CHANNEL_WORKSPACE_PREFIX = "dsh-im-channel:"/)
   assert.match(client, /function installChannelGroupOption\(/)
   assert.match(client, /setTimeout\(options\.onSelect, 0\)/)
-  assert.match(client, /function channelIconCss\(/)
+  assert.doesNotMatch(client, /function channelIconCss\(/)
   assert.match(client, /data:image\/svg\+xml/)
   assert.match(client, /rail\.byChannel/)
   assert.match(client, /data-mode="channel"/)
@@ -56,7 +56,7 @@ test('频道页默认按频道分组，并注入第四个分组选项', () => {
 })
 
 test('频道组合成工作区保留真实工作区和归档集合', () => {
-  const code = extractBlock(client, '    const CHANNEL_WORKSPACE_PREFIX = "dsh-im-channel:";', '    let channelIconCssValue', '频道合成工作区', [
+  const code = extractBlock(client, '    const CHANNEL_WORKSPACE_PREFIX = "dsh-im-channel:";', '    /** 把 React 元素渲染成可直接注入官方 DOM 的 HTML。 */', '频道合成工作区', [
     'function syntheticChannelWorkspaceState(',
     'function channelRealWorkspaceState(',
   ])
@@ -105,11 +105,17 @@ test('频道组合成工作区保留真实工作区和归档集合', () => {
   assert.deepEqual(real.items[0].sessionIds, ['a'])
   assert.equal(real.items[0].title, 'Real')
 
-  const filtered = api.channelMemberSessionState({
+  const sessionState = {
     ids: ['a', 'task', 'b'],
-    byId: { a: { id: 'a' }, task: { id: 'task' }, b: { id: 'b' } },
-  }, new Set(['a', 'b']))
+    byId: { a: { id: 'a', blank: true }, task: { id: 'task' }, b: { id: 'b', blank: true } },
+  }
+  const members = new Set(['a', 'b'])
+  const filtered = api.channelMemberSessionState(sessionState, members, new Set(['a']))
   assert.deepEqual(filtered.ids, ['a', 'b'])
+  assert.equal(filtered.byId.a.blank, false, '当前频道空白会话应当能从频道打开')
+  assert.equal(filtered.byId.b.blank, true, '历史空白会话仍按宿主规则隐藏')
+  assert.equal(sessionState.byId.a.blank, true, '不能污染宿主用于创建会话的快照')
+  assert.equal(api.channelMemberSessionState(sessionState, members, new Set()).byId.a.blank, true)
 })
 
 test('频道视图状态独立且不污染任务树', () => {

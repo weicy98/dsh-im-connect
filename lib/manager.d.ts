@@ -32,6 +32,7 @@ export interface ChannelState {
     permission?: PermissionPreset;
     commandPermissions?: CommandPermissions;
     privateAccess?: 'approved' | 'all';
+    groupAccess?: 'all' | 'approved' | 'disabled';
     /** 普通消息的默认发送方式；缺省为排队发送。 */
     sendMode?: SendMode;
     /** 分段回复：覆盖插件级默认值；缺省时跟随插件配置。 */
@@ -62,6 +63,7 @@ export interface AccountView {
     permission: PermissionPreset;
     commandPermissions: CommandPermissions;
     privateAccess: 'approved' | 'all';
+    groupAccess: 'all' | 'approved' | 'disabled';
     sendMode: SendMode;
     segmentReply: boolean;
     /** 该渠道是否已开放分段回复；未开放的渠道不展示开关。 */
@@ -77,6 +79,7 @@ export interface AccountView {
     freeChatGroups?: string;
     thinkingDisplay?: boolean;
     threadSessions?: boolean;
+    wsUrl?: string;
     lastCheckedAt?: string;
 }
 interface AccountDiagnosticResult {
@@ -107,6 +110,15 @@ export interface ChannelView {
     accounts: AccountView[];
     online: number;
     total: number;
+}
+export interface ChannelSessionGroup {
+    /** 兼容期平台标识（供旧客户端按平台聚合），多账号时平台内各账号实例共享；后续大版本迁移后将统一为 accountId */
+    id: string;
+    /** 账号唯一实例 ID */
+    accountId: string;
+    platform: ChannelId;
+    label: string;
+    sessions: SessionRecord[];
 }
 interface PendingRequest {
     userId: string;
@@ -148,11 +160,8 @@ export declare class ChannelManager {
     private hydrateProxyUrl;
     private hydrateProxyUrls;
     private accountView;
-    channelSessions(): {
-        id: ChannelId;
-        label: string;
-        sessions: SessionRecord[];
-    }[];
+    accountGroupLabel(accountId: string, state: ChannelState | undefined, multiAccount: boolean): string;
+    channelSessions(): ChannelSessionGroup[];
     connect(id: ChannelId, config?: Record<string, string>, settings?: Record<string, unknown>): Promise<{
         ok: boolean;
         error?: string;
@@ -170,7 +179,8 @@ export declare class ChannelManager {
     private disconnectNow;
     remove(id: string): Promise<void>;
     private removeNow;
-    attachMappedSessions(): Promise<void>;
+    recoverMappedSessions(): Promise<void>;
+    attachMappedSessions(active: () => boolean): Promise<void>;
     initEnabled(): Promise<void>;
     registerApi(ctx: Context): void;
     disposeApi(): void;

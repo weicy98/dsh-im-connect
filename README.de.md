@@ -40,7 +40,7 @@ Eingehende Nachrichten werden anhand des Absenders geprüft, bevor Befehle oder 
 | Anwendungsfall | Verhalten |
 |---|---|
 | Gruppe ohne @Erwähnung des Bots | Wird ignoriert; keine Antwort oder Genehmigungsanfrage. Erwähnungen anderer Mitglieder lösen nichts aus |
-| Gruppe mit expliziter @Erwähnung | Keine Kopplung erforderlich: Jedes Gruppenmitglied kann Aufgaben anstoßen |
+| Gruppe, die Auslöseregeln erfüllt | Der Gruppenzugriff erlaubt standardmäßig alle Mitglieder; konfigurierbar als „Nur genehmigte Nutzer“ oder „Deaktiviert“. Nicht genehmigte Nachrichten werden stillschweigend ignoriert |
 | Direktnachricht vom QR-Scanner | Nutzer von WeChat, Feishu, Lark und QQ, die den QR-Code gescannt haben, landen automatisch auf der Whitelist |
 | Direktnachricht von anderen Nutzern | Landet in der Warteliste der Einstellungen, bis ein Administrator die Freigabe erteilt |
 | Direktnachricht nach QR-Kopplung ohne Identität | QR-Kopplungen bei DingTalk und WeCom liefern nur Bot-Zugangsdaten; der Nutzer muss freigegeben werden |
@@ -69,9 +69,9 @@ Eingehende Nachrichten werden anhand des Absenders geprüft, bevor Befehle oder 
 | **🐦 Feishu** | QR-Code / Manuell | Long Polling / Events | Open API / Interaktive Nachrichten |
 | **🌐 Lark** | QR-Code / Manuell | Long Polling / Events | Open API / Interaktive Nachrichten |
 | **💬 WeChat** | QR-Code | Offizielles Synchron-Polling | Natives Synchronisationsprotokoll |
-| **🏢 WeCom** | QR-Code / Manuell | Interne Rückrufe | Webhook / Formatierte Karten |
+| **🏢 WeCom** | QR-Code / Manuell / WebSocket-URL | Interne Rückrufe | Webhook / Formatierte Karten / On-Premise-Support |
 | **🐧 QQ** | QR-Code / Manuell | Offizielles WebSocket / Webhook | OpenAPI / Rich Markdown |
-| **✈️ Telegram** | Bot-Token | Long Polling (getUpdates) | Telegram Bot API / Einklappbare Zitate |
+| **✈️ Telegram** | Bot-Token | Long Polling (getUpdates) | Telegram Bot API |
 | **🎮 Discord** | Bot-Token | Gateway-WebSocket | REST-API |
 | **💬 Slack** | Bot-Token & App-Token | Socket Mode WebSocket | Web-API / Block Kit |
 
@@ -101,11 +101,22 @@ Erreichbar über die Verwaltung unter **Plugins → @michengai/dsh-im-connect**:
 
 ### 4. Einklappbare Denkprozess-Anzeige (`thinkingDisplay`)
 - **Standard**: Aus (`off`)
-- **Funktion**: Übermittelt den Denkprozess des Modells auf Telegram als einklappbaren Zitatblock (`<blockquote expandable>`) sowie auf Feishu/Lark als nativen Denkprozess bzw. einklappbare Karte in Threads.
+- **Funktion**: Übermittelt den Denkprozess des Modells auf Feishu/Lark als nativen Denkprozess bzw. einklappbare Karte in Threads (Telegram unterstützt keine eingeklappte Denkprozess-Anzeige mehr, reguläre Statuszeilen und Antworten bleiben erhalten).
 
 ### 5. Feishu-Thread-Sitzungsisolation (`threadSessions`)
 - **Standard**: Deaktiviert (`false`)
 - **Funktion**: Wenn aktiviert, behalten Antwort-Threads in Feishu-Gruppen isolierte Sitzungen und Kontexte basierend auf der Root-Nachrichten-ID. Standardmäßig teilen alle Threads den Gruppenkontext.
+
+### 6. Benutzerdefinierte WeCom-WebSocket-URL (`wsUrl`)
+- **Standard**: Offizielle URL (`wss://openws.work.weixin.qq.com`)
+- **Funktion**: Erlaubt die Konfiguration einer benutzerdefinierten WebSocket-URL für lokale oder On-Premise-Bereitstellungen. Leer lassen, um die offizielle Standardadresse zu verwenden.
+- **UI-Konfiguration**: Geben Sie die URL im Formular für manuelle Zugangsdaten ein oder passen Sie sie jederzeit in den Kontodetails an. Änderungen verbinden sich nach dem Speichern automatisch neu.
+- **Beispiel** (Kontokonfiguration):
+  ```json
+  {
+    "wsUrl": "wss://custom.wecom.internal/ws"
+  }
+  ```
 
 ## Nutzung und Befehle
 

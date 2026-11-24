@@ -1,4 +1,4 @@
-import type { ChannelAdapter, ThinkingOptions } from './types.js'
+import { DEFAULT_THINKING_MAX_CHARS, type ChannelAdapter, type ThinkingOptions } from './types.js'
 
 export interface ThinkingDisplayConfig {
   mode: 'off' | 'collapsed'
@@ -19,7 +19,7 @@ export function normalizeThinkingDisplay(value: unknown): ThinkingDisplayConfig 
     mode: input.mode === 'collapsed' ? 'collapsed' : 'off',
     minChars: number('minChars', 120, 0, 4096),
     intervalMs: number('intervalMs', 2000, 1000, 60000),
-    maxChars: number('maxChars', 3500, 200, 4096),
+    maxChars: number('maxChars', DEFAULT_THINKING_MAX_CHARS, 200, 4096),
   }
 }
 
@@ -41,11 +41,16 @@ interface Lifecycle {
   streamId: string
   prefix: string
   total: number
+  bufferLimit: number
   /** Numeric surrogate metadata, never an unbounded second reasoning buffer. */
   high?: number
   closed: boolean
   lastAt?: number
   final: boolean
+}
+
+function isChannelPlatform(channelId: string, platform: string): boolean {
+  return channelId === platform || channelId.startsWith(`${platform}_`)
 }
 
 /** Owns raw reasoning only for explicitly enabled, supported, live generations. */
@@ -58,23 +63,32 @@ export class ThinkingDisplayTracker {
   constructor(private readonly onError: (error: unknown) => void = () => {}, private readonly now = () => Date.now()) {}
 
   start(target: ThinkingDisplayTarget): void {
+    if (isChannelPlatform(target.channel.id, 'telegram')) return
     const old = this.identities.get(target.key)
     if (old?.sessionId === target.sessionId && target.turn !== undefined
       && old.turn !== undefined && target.turn < old.turn) return
     this.cancelKey(target.key)
+    const config = normalizeThinkingDisplay(target.config)
+    if (config.mode !== 'collapsed' || !target.channel.sendThinking || !target.isCurrent()) return
     // Tombstones reject late frames after finalization without retaining raw text.
     if (this.identities.size >= 1024 && !this.identities.has(target.key)) this.identities.delete(this.identities.keys().next().value!)
     this.identities.set(target.key, { sessionId: target.sessionId, turn: target.turn })
-    const config = normalizeThinkingDisplay(target.config)
-    if (config.mode !== 'collapsed' || !target.channel.sendThinking || !target.isCurrent()) return
+    const channelLimit = target.channel.maxThinkingChars
+      ?? (isChannelPlatform(target.channel.id, 'feishu') || isChannelPlatform(target.channel.id, 'lark') ? 65536 : 4096)
+    const raw = target.config && typeof target.config === 'object' ? target.config as Record<string, unknown> : {}
+    // 原生长思维链渠道（如飞书/Lark）享有 64K 原生流式预算；
+    // 只有当用户显式配置收紧预算（< 3500）时，才收紧缓冲预算；
+    // 生产环境中默认或普通单条消息上限（3500/4096）不应截断原生长思维链。
+    const tight = typeof raw.maxChars === 'number' && Number.isFinite(raw.maxChars) && raw.maxChars < DEFAULT_THINKING_MAX_CHARS
+    const bufferLimit = tight ? Math.min(channelLimit, config.maxChars) : channelLimit
     this.states.set(target.key, {
       target, config, scope: new AbortController(), streamId: `${target.sessionId}:${this.identity}:${++this.generation}`,
-      prefix: '', total: 0, closed: false, final: false,
+      prefix: '', total: 0, bufferLimit, closed: false, final: false,
     })
   }
 
   append(target: ThinkingDisplayTarget, text: string): void {
-    if (!text) return
+    if (!text || isChannelPlatform(target.channel.id, 'telegram')) return
     let state = this.states.get(target.key)
     if (!state) {
       const identity = this.identities.get(target.key)
@@ -99,7 +113,7 @@ export class ThinkingDisplayTracker {
         state.high = last
         addition = addition.slice(0, -1)
       }
-      const room = 4096 - state.prefix.length
+      const room = state.bufferLimit - state.prefix.length
       let prefix = addition.slice(0, room)
       const end = prefix.charCodeAt(prefix.length - 1)
       if (end >= 0xd800 && end <= 0xdbff) prefix = prefix.slice(0, -1)
@@ -118,6 +132,7 @@ export class ThinkingDisplayTracker {
   }
 
   finish(target: ThinkingDisplayTarget): Promise<void> {
+    if (isChannelPlatform(target.channel.id, 'telegram')) return Promise.resolve()
     const state = this.states.get(target.key)
     if (!state || !this.matches(state, target) || state.final || !this.valid(state)) return Promise.resolve()
     state.final = true
@@ -174,10 +189,14 @@ export class ThinkingDisplayTracker {
 
   private send(state: Lifecycle, final: boolean): Promise<void> {
     if (!this.valid(state)) return Promise.resolve()
+    // 渠道能力高于普通单条上限时（如飞书 64K 原生流式通道），按 bufferLimit 下发；普通单条渠道（<= 4096）在 bufferLimit 与 config.maxChars 之间取较小值
+    const maxChars = state.bufferLimit > 4096
+      ? state.bufferLimit
+      : Math.min(state.bufferLimit, state.config.maxChars)
     const options: ThinkingOptions = {
-      final, label: state.target.label(final, state.total), maxChars: state.config.maxChars,
+      final, label: state.target.label(final, state.total), maxChars,
       streamId: state.streamId, signal: state.scope.signal, isCurrent: () => this.valid(state),
-      truncated: state.closed || state.high !== undefined,
+      truncated: Boolean(state.closed),
     }
     try {
       const work = state.target.channel.sendThinking!(state.target.chatId, state.prefix, options)

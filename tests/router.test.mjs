@@ -50,8 +50,8 @@ for (const shape of ['legacy', 'stat']) {
     const headers = ['before', 'after'].map(chatId => ({ id: `im:wecom:dm:1724000000000:${chatId}`, cwd: 'D:/recovered', createdAt: 1000 }))
     const entry = header => shape === 'stat' ? { header, eventCount: 1 } : header
     f.ctx.get = name => name === 'sessionPersistence' ? { list: async () => [entry(headers[0]), {}, null, entry(headers[1])] } : undefined
-    await f.router.attachMappedSessions()
-    await f.router.attachMappedSessions()
+    await f.router.recoverMappedSessions(() => true)
+    await f.router.recoverMappedSessions(() => true)
     assert.deepEqual(f.store.list().map(item => item.sessionId).sort(), headers.map(item => item.id).sort())
     assert.equal(f.store.get('wecom:dm:before'), undefined)
     assert.equal(f.store.get('wecom:dm:after'), undefined)
@@ -62,8 +62,8 @@ test('新版持久化列表恢复历史头信息且幂等', async t => {
   const f = makeRouter(t)
   const header = { id: 'im:wecom:dm:1724000000000:recovered', cwd: 'D:/recovered', createdAt: 1000 }
   f.ctx.get = name => name === 'sessionPersistence' ? { list: async () => [{ header, eventCount: 3 }] } : undefined
-  await f.router.attachMappedSessions()
-  await f.router.attachMappedSessions()
+  await f.router.recoverMappedSessions(() => true)
+  await f.router.recoverMappedSessions(() => true)
   assert.equal(f.store.list().length, 1)
   assert.equal(f.store.list()[0].cwd, header.cwd)
   assert.equal(f.store.list()[0].sessionId, header.id)
@@ -195,8 +195,8 @@ test('启动补回孤立日志且不自动设为当前会话，重复恢复保�
   const { router, store } = makeRouter(t)
   const id = 'im:wecom:dm:1724000000000:orphan'
   router.ctx.get = name => name === 'sessionPersistence' ? { async list() { return [{ id }] } } : undefined
-  await router.attachMappedSessions()
-  await router.attachMappedSessions()
+  await router.recoverMappedSessions(() => true)
+  await router.recoverMappedSessions(() => true)
   assert.deepEqual(store.list().map(x => x.sessionId), [id])
   assert.equal(store.get('wecom:dm:orphan'), undefined)
   assert.equal(await router.ensure(id), true)
@@ -230,8 +230,10 @@ test('启动恢复保留归档标记，不把已归档会话重新挂入工作�
   const attached = []
   router.ctx.get = name => {
     if (name === 'sessionPersistence') return { async list() { return [{ id }] } }
+    if (name === 'sessionController') return { list: async () => ({ items: [{ sessionId: id, blank: false }] }) }
     if (name === 'workspaceRegistry') return { archivedSessionIds: [id], list: () => [{ path: '.', async attachSession(value) { attached.push(value) } }] }
   }
+  await router.recoverMappedSessions(() => true)
   await router.attachMappedSessions()
   assert.equal(store.list().length, 1)
   assert.deepEqual(attached, [])
@@ -731,14 +733,88 @@ for (const archived of [false, true]) {
   })
 }
 
-test('工作区挂载失败或创建中取消不替换当前绑定', async t => {
+test('空白 IM 会话保留频道绑定和工作目录，不成为工作区草稿', async t => {
+  const f = makeRouter(t)
+  const attached = []
+  const get = f.ctx.get
+  f.ctx.get = name => name === 'workspaceRegistry'
+    ? { list: () => [{ path: 'D:/chosen', sessionIds: attached, async attachSession(id) { attached.push(id) } }] }
+    : get(name)
+  const next = await f.router.rotate('telegram', 'dm', 'blank', '新', { cwd: 'D:/chosen' })
+  assert.equal(f.router.lookup('telegram', 'dm', 'blank').sessionId, next.sessionId)
+  assert.equal(f.createdOptions[0].meta.cwd, 'D:/chosen')
+  assert.deepEqual(attached, [], '空白 IM 会话不能成为工作区新建时的候选')
+})
+
+test('启动只摘除已确认空白的自建 IM 成员，保留已使用和无法确认的会话', async t => {
+  const f = makeRouter(t)
+  const ids = new Set(['dsh-im-session-live', 'im:telegram:dm:1700000000000:past', 'dsh-im-session-unknown', 'ordinary-adopted'])
+  const members = {
+    path: 'D:/chosen',
+    get sessionIds() { return [...ids] },
+    async attachSession(id) { ids.add(id) },
+    async detachSession(id) { ids.delete(id) },
+  }
+  const entries = [
+    ['dsh-im-session-live', true, {}],
+    ['im:telegram:dm:1700000000000:past', true, { detached: true }],
+    ['dsh-im-session-used', false, {}],
+    ['dsh-im-session-unknown', undefined, {}],
+    ['ordinary-adopted', true, { adopted: true }],
+  ]
+  for (const [sessionId, , flags] of entries) {
+    f.store.upsert(sessionId, { sessionId, channel: 'telegram', kind: 'dm', chatId: sessionId, title: '测试', cwd: members.path, updatedAt: '2026-01-01T00:00:00Z', ...flags })
+  }
+  f.ctx.get = name => name === 'workspaceRegistry' ? { list: () => [members] }
+    : name === 'sessionController' ? { list: async () => ({ items: entries.map(([sessionId, blank]) => ({ sessionId, blank })) }) } : undefined
+  await f.router.attachMappedSessions()
+  await f.router.attachMappedSessions()
+  assert.deepEqual([...ids].sort(), ['dsh-im-session-unknown', 'dsh-im-session-used', 'ordinary-adopted'])
+  assert.equal(f.store.list().length, entries.length)
+})
+
+test('启动核对工作区成员时 sessionController 缺失安全降级并输出日志', async t => {
+  const f = makeRouter(t)
+  const logs = []
+  f.router.log = msg => logs.push(msg)
+  f.store.upsert('dsh-im-session-test', { sessionId: 'dsh-im-session-test', channel: 'telegram', kind: 'dm', chatId: 'test', title: '测试', updatedAt: '2026-01-01T00:00:00Z' })
+  f.ctx.get = name => undefined
+  await f.router.attachMappedSessions()
+  assert.ok(logs.some(msg => msg.includes('sessionController 未就绪或未提供 list 接口')))
+})
+
+test('摘除空白会话时若工作区未实现 detachSession 输出日志并不抛错', async t => {
+  const f = makeRouter(t)
+  const logs = []
+  f.router.log = msg => logs.push(msg)
+  const sessionId = 'dsh-im-session-test'
+  const members = {
+    path: 'D:/chosen',
+    sessionIds: [sessionId],
+  }
+  f.store.upsert(sessionId, { sessionId, channel: 'telegram', kind: 'dm', chatId: 'test', title: '测试', cwd: members.path, updatedAt: '2026-01-01T00:00:00Z' })
+  f.ctx.get = name => name === 'workspaceRegistry' ? { list: () => [members] }
+    : name === 'sessionController' ? { list: async () => ({ items: [{ sessionId, blank: true }] }) } : undefined
+  await f.router.attachMappedSessions()
+  assert.ok(logs.some(msg => msg.includes('未提供 detachSession 方法')))
+})
+
+test('恢复和打开空白频道会话不重新挂入工作区', async t => {
+  const f = makeRouter(t)
+  const attached = []
+  const next = await f.router.rotate('telegram', 'dm', 'cold-draft', '新', { cwd: 'D:/chosen' })
+  await f.router.disposeChannel('telegram')
+  f.ctx.get = name => name === 'workspaceRegistry'
+    ? { list: () => [{ path: 'D:/chosen', sessionIds: attached, async attachSession(id) { attached.push(id) } }] }
+    : undefined
+  assert.equal(await f.router.ensure(next.sessionId), true)
+  assert.deepEqual(attached, [])
+  assert.equal(f.router.lookup('telegram', 'dm', 'cold-draft').sessionId, next.sessionId)
+})
+
+test('创建中取消不替换当前绑定', async t => {
   const f = makeRouter(t)
   const old = await f.router.getOrCreate('wecom', 'dm', 'attach', '旧')
-  const get = f.ctx.get
-  f.ctx.get = name => name === 'workspaceRegistry' ? { list: () => [{ path: 'D:/chosen', async attachSession() { throw new Error('挂载失败') } }] } : get(name)
-  await assert.rejects(f.router.rotate('wecom', 'dm', 'attach', '新', { cwd: 'D:/chosen' }), /挂载失败/)
-  assert.equal(f.router.lookup('wecom', 'dm', 'attach').sessionId, old.sessionId)
-  f.ctx.get = get
   const scope = new AbortController(), create = f.ctx.agents.create
   f.ctx.agents.create = async opts => { const result = await create(opts); scope.abort(); return result }
   await assert.rejects(f.router.rotate('wecom', 'dm', 'attach', '新', { signal: scope.signal }), { name: 'AbortError' })
@@ -838,4 +914,99 @@ test('普通消息按发送方式选择 followup 或 steer，旧宿主无 steer 
   delete binding.handle.agent.steer
   router.followup(binding, message, 'steer')
   assert.deepEqual(calls, [['followup', message]])
+})
+
+test('启动核对冷会话：若 host list 未标记 blank 但在工作区中，sessionQuery 验证无 turn/start 则判定为 blank 并摘除', async t => {
+  const f = makeRouter(t)
+  const sessionId = 'im:telegram:dm:1700000000000:cold-blank'
+  const detached = []
+  let disposed = false
+  const members = {
+    path: 'D:/chosen',
+    sessionIds: [sessionId],
+    async detachSession(id) {
+      detached.push(id)
+      members.sessionIds = members.sessionIds.filter(x => x !== id)
+    },
+  }
+  f.store.upsert(sessionId, { sessionId, channel: 'telegram', kind: 'dm', chatId: 'test', title: '冷草稿', cwd: members.path, updatedAt: '2026-01-01T00:00:00Z' })
+  f.ctx.get = name => {
+    if (name === 'workspaceRegistry') return { list: () => [members] }
+    if (name === 'sessionController') return { list: async () => ({ items: [{ sessionId, blank: false }] }) }
+    if (name === 'sessionQuery') {
+      return {
+        async observeSession(id) {
+          assert.equal(id, sessionId)
+          return {
+            events: [{ type: 'session/created' }],
+            [Symbol.dispose]() { disposed = true },
+          }
+        },
+      }
+    }
+    return undefined
+  }
+  await f.router.attachMappedSessions()
+  assert.deepEqual(detached, [sessionId])
+  assert.equal(disposed, true)
+})
+
+test('启动核对冷会话：若 sessionQuery 发现包含 turn/start，判定非空白并保留在工作区', async t => {
+  const f = makeRouter(t)
+  const sessionId = 'im:telegram:dm:1700000000000:cold-active'
+  const detached = []
+  let disposed = false
+  const members = {
+    path: 'D:/chosen',
+    sessionIds: [sessionId],
+    async detachSession(id) { detached.push(id) },
+  }
+  f.store.upsert(sessionId, { sessionId, channel: 'telegram', kind: 'dm', chatId: 'test', title: '有对话', cwd: members.path, updatedAt: '2026-01-01T00:00:00Z' })
+  f.ctx.get = name => {
+    if (name === 'workspaceRegistry') return { list: () => [members] }
+    if (name === 'sessionController') return { list: async () => ({ items: [{ sessionId, blank: false }] }) }
+    if (name === 'sessionQuery') {
+      return {
+        async observeSession(id) {
+          return {
+            events: [{ type: 'session/created' }, { type: 'turn/start' }],
+            [Symbol.dispose]() { disposed = true },
+          }
+        },
+      }
+    }
+    return undefined
+  }
+  await f.router.attachMappedSessions()
+  assert.deepEqual(detached, [])
+  assert.equal(disposed, true)
+})
+
+test('启动核对冷会话：sessionQuery 异常时安全记录日志并降级，不阻断对齐流程', async t => {
+  const f = makeRouter(t)
+  const logs = []
+  f.router.log = msg => logs.push(msg)
+  const sessionId = 'im:telegram:dm:1700000000000:cold-error'
+  const detached = []
+  const members = {
+    path: 'D:/chosen',
+    sessionIds: [sessionId],
+    async detachSession(id) { detached.push(id) },
+  }
+  f.store.upsert(sessionId, { sessionId, channel: 'telegram', kind: 'dm', chatId: 'test', title: '测试', cwd: members.path, updatedAt: '2026-01-01T00:00:00Z' })
+  f.ctx.get = name => {
+    if (name === 'workspaceRegistry') return { list: () => [members] }
+    if (name === 'sessionController') return { list: async () => ({ items: [{ sessionId, blank: false }] }) }
+    if (name === 'sessionQuery') {
+      return {
+        async observeSession() {
+          throw new Error('disk read failed')
+        },
+      }
+    }
+    return undefined
+  }
+  await f.router.attachMappedSessions()
+  assert.deepEqual(detached, [])
+  assert.ok(logs.some(msg => msg.includes('无法读取会话') && msg.includes('disk read failed')))
 })
